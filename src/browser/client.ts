@@ -46,6 +46,10 @@ export type BrowserTab = {
   url: string;
   wsUrl?: string;
   type?: string;
+  windowRole?: "task" | "user";
+  active?: boolean;
+  isPrimary?: boolean;
+  attachOrder?: number;
 };
 
 export type SnapshotAriaNode = {
@@ -63,6 +67,7 @@ export type SnapshotResult =
       ok: true;
       format: "aria";
       targetId: string;
+      tabId?: number;
       url: string;
       nodes: SnapshotAriaNode[];
     }
@@ -70,6 +75,7 @@ export type SnapshotResult =
       ok: true;
       format: "ai";
       targetId: string;
+      tabId?: number;
       url: string;
       snapshot: string;
       truncated?: boolean;
@@ -230,26 +236,28 @@ export async function browserOpenTab(
 
 export async function browserFocusTab(
   baseUrl: string | undefined,
-  targetId: string,
+  selection: { targetId?: string; tabId?: number },
   opts?: { profile?: string },
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/focus${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId }),
+    body: JSON.stringify(selection),
     timeoutMs: 5000,
   });
 }
 
 export async function browserCloseTab(
   baseUrl: string | undefined,
-  targetId: string,
+  selection: { targetId?: string; tabId?: number },
   opts?: { profile?: string },
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
-  await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/${encodeURIComponent(targetId)}${q}`), {
-    method: "DELETE",
+  await fetchBrowserJson(withBaseUrl(baseUrl, `/tabs/close${q}`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(selection),
     timeoutMs: 5000,
   });
 }
@@ -279,6 +287,7 @@ export async function browserSnapshot(
   opts: {
     format: "aria" | "ai";
     targetId?: string;
+    tabId?: number;
     limit?: number;
     maxChars?: number;
     refs?: "role" | "aria";
@@ -296,6 +305,9 @@ export async function browserSnapshot(
   q.set("format", opts.format);
   if (opts.targetId) {
     q.set("targetId", opts.targetId);
+  }
+  if (typeof opts.tabId === "number" && Number.isFinite(opts.tabId)) {
+    q.set("tabId", String(Math.floor(opts.tabId)));
   }
   if (typeof opts.limit === "number") {
     q.set("limit", String(opts.limit));

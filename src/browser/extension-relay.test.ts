@@ -411,6 +411,98 @@ describe("chrome extension relay server", () => {
     RELAY_TEST_TIMEOUT_MS,
   );
 
+  it("exposes extension tab metadata in /json/list with primary task tabs first", async () => {
+    const { ext } = await startRelayWithExtension();
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-user",
+            targetInfo: {
+              targetId: "user-target",
+              type: "page",
+              title: "User tab",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+            tabId: 7,
+            windowRole: "user",
+            active: false,
+            isPrimary: false,
+            attachOrder: 1,
+          },
+        },
+      }),
+    );
+
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "cb-tab-task",
+            targetInfo: {
+              targetId: "task-target",
+              type: "page",
+              title: "Task tab",
+              url: "https://x.com/openclaw",
+            },
+            waitingForDebugger: false,
+            tabId: 42,
+            windowRole: "task",
+            active: true,
+            isPrimary: true,
+            attachOrder: 9,
+          },
+        },
+      }),
+    );
+
+    const list = await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`, {
+          headers: relayAuthHeaders(cdpUrl),
+        }).then((r) => r.json())) as Array<{
+          id?: string;
+          tabId?: number;
+          windowRole?: string;
+          active?: boolean;
+          isPrimary?: boolean;
+          attachOrder?: number;
+        }>,
+      (items) =>
+        items.length === 2 &&
+        items[0]?.id === "task-target" &&
+        items[0]?.windowRole === "task" &&
+        items[0]?.isPrimary === true &&
+        items[0]?.active === true &&
+        items[0]?.attachOrder === 9,
+    );
+
+    expect(list[0]).toMatchObject({
+      id: "task-target",
+      tabId: 42,
+      windowRole: "task",
+      active: true,
+      isPrimary: true,
+      attachOrder: 9,
+    });
+    expect(list[1]).toMatchObject({
+      id: "user-target",
+      tabId: 7,
+      windowRole: "user",
+      active: false,
+      isPrimary: false,
+      attachOrder: 1,
+    });
+
+    ext.close();
+  });
+
   it("rebroadcasts attach when a session id is reused for a new target", async () => {
     const { port, ext } = await startRelayWithExtension();
 

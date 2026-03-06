@@ -31,6 +31,7 @@ import type {
   BrowserServerState,
   BrowserRouteContext,
   BrowserTab,
+  BrowserTabSelection,
   ContextOptions,
   ProfileContext,
   ProfileRuntimeState,
@@ -43,6 +44,7 @@ export type {
   BrowserRouteContext,
   BrowserServerState,
   BrowserTab,
+  BrowserTabSelection,
   ProfileContext,
   ProfileRuntimeState,
   ProfileStatus,
@@ -100,6 +102,35 @@ function createProfileContext(
     profileState.running = running;
   };
 
+  const normalizeTabSelection = (
+    selection?: BrowserTabSelection,
+  ): { targetId?: string; tabId?: number } => {
+    if (typeof selection === "string") {
+      const targetId = selection.trim();
+      return targetId ? { targetId } : {};
+    }
+    if (!selection || typeof selection !== "object") {
+      return {};
+    }
+    const targetId =
+      typeof selection.targetId === "string" && selection.targetId.trim()
+        ? selection.targetId.trim()
+        : undefined;
+    const tabId =
+      typeof selection.tabId === "number" && Number.isFinite(selection.tabId)
+        ? Math.floor(selection.tabId)
+        : undefined;
+    return { targetId, tabId };
+  };
+
+  const rememberSelectedTab = (tab: BrowserTab) => {
+    const profileState = getProfileState();
+    profileState.lastTargetId = tab.targetId;
+    if (tab.tabId !== undefined) {
+      profileState.lastTabId = tab.tabId;
+    }
+  };
+
   const listTabs = async (): Promise<BrowserTab[]> => {
     // For remote profiles (non-extension), use Playwright's persistent connection.
     // Extension profiles use HTTP /json/list directly because extension-relay
@@ -127,6 +158,10 @@ function createProfileContext(
         url?: string;
         webSocketDebuggerUrl?: string;
         type?: string;
+        windowRole?: "task" | "user";
+        active?: boolean;
+        isPrimary?: boolean;
+        attachOrder?: number;
       }>
     >(appendCdpPath(profile.cdpUrl, "/json/list"));
     return raw
@@ -137,8 +172,51 @@ function createProfileContext(
         url: t.url ?? "",
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
+        windowRole: t.windowRole,
+        active: t.active,
+        isPrimary: t.isPrimary,
+        attachOrder: t.attachOrder,
       }))
       .filter((t) => Boolean(t.targetId));
+  };
+
+  const pickPreferredExtensionTab = (candidates: BrowserTab[]): BrowserTab | null => {
+    const pageCandidates = candidates.filter((tab) => (tab.type ?? "page") === "page");
+    if (pageCandidates.length === 0) {
+      return null;
+    }
+
+    const sorted = [...pageCandidates].toSorted((left, right) => {
+      const leftTaskPrimaryScore = left.windowRole === "task" && left.isPrimary ? 0 : 1;
+      const rightTaskPrimaryScore = right.windowRole === "task" && right.isPrimary ? 0 : 1;
+      if (leftTaskPrimaryScore !== rightTaskPrimaryScore) {
+        return leftTaskPrimaryScore - rightTaskPrimaryScore;
+      }
+
+      const leftTaskScore = left.windowRole === "task" ? 0 : 1;
+      const rightTaskScore = right.windowRole === "task" ? 0 : 1;
+      if (leftTaskScore !== rightTaskScore) {
+        return leftTaskScore - rightTaskScore;
+      }
+
+      const leftPrimaryScore = left.isPrimary ? 0 : 1;
+      const rightPrimaryScore = right.isPrimary ? 0 : 1;
+      if (leftPrimaryScore !== rightPrimaryScore) {
+        return leftPrimaryScore - rightPrimaryScore;
+      }
+
+      const leftActiveScore = left.active ? 0 : 1;
+      const rightActiveScore = right.active ? 0 : 1;
+      if (leftActiveScore !== rightActiveScore) {
+        return leftActiveScore - rightActiveScore;
+      }
+
+      const leftAttachOrder = typeof left.attachOrder === "number" ? left.attachOrder : -1;
+      const rightAttachOrder = typeof right.attachOrder === "number" ? right.attachOrder : -1;
+      return rightAttachOrder - leftAttachOrder;
+    });
+
+    return sorted[0] ?? null;
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
@@ -378,12 +456,22 @@ function createProfileContext(
     }
   };
 
-  const ensureTabAvailable = async (targetId?: string): Promise<BrowserTab> => {
+  const ensureTabAvailable = async (selection?: BrowserTabSelection): Promise<BrowserTab> => {
     await ensureBrowserAvailable();
     const profileState = getProfileState();
+    const { targetId, tabId } = normalizeTabSelection(selection);
     const tabs1 = await listTabs();
     if (tabs1.length === 0) {
       if (profile.driver === "extension") {
+        const relay = await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch(
+          () => null,
+        );
+        if (relay && !relay.extensionConnected()) {
+          throw new Error(
+            `[relay_reconnecting] Browser Relay is disconnected or reconnecting for profile "${profile.name}". ` +
+              "Wait for the extension to reconnect, then retry.",
+          );
+        }
         throw new Error(
           `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
             "Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON).",
@@ -411,6 +499,9 @@ function createProfileContext(
       return candidates.find((t) => t.targetId === resolved.targetId) ?? null;
     };
 
+    const resolveByTabId = (rawTabId: number) =>
+      candidates.find((t) => t.tabId === rawTabId) ?? null;
+
     const pickDefault = () => {
       // Priority 1: Use lastTabId (stable across navigation)
       const lastTab = profileState.lastTabId;
@@ -426,25 +517,57 @@ function createProfileContext(
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;
       }
+      if (profile.driver === "extension") {
+        const preferredExtensionTab = pickPreferredExtensionTab(candidates);
+        if (preferredExtensionTab) {
+          return preferredExtensionTab;
+        }
+      }
       // Priority 3: Pick first page tab (avoid service workers/background targets).
       const page = candidates.find((t) => (t.type ?? "page") === "page");
       return page ?? candidates.at(0) ?? null;
     };
 
-    let chosen = targetId ? resolveById(targetId) : pickDefault();
-    if (!chosen && targetId && (profile.driver === "extension" || !profile.cdpIsLoopback)) {
+    let chosen = targetId
+      ? resolveById(targetId)
+      : tabId !== undefined
+        ? resolveByTabId(tabId)
+        : pickDefault();
+    if (!chosen && targetId) {
       // If an agent passes a stale/foreign targetId, try to recover:
       // 1. Use lastTabId if available (handles cross-origin navigation where targetId changes)
       // 2. Fall back to single-tab recovery
-      const lastTab = profileState.lastTabId;
-      if (lastTab !== null && lastTab !== undefined) {
-        const byTabId = candidates.find((t) => t.tabId === lastTab);
+      const requestedTargetMatchesRememberedSelection =
+        (profileState.lastTargetId?.trim() || "") === targetId;
+      const recoveryTabId =
+        tabId !== undefined
+          ? tabId
+          : requestedTargetMatchesRememberedSelection
+            ? profileState.lastTabId
+            : undefined;
+      if (recoveryTabId !== null && recoveryTabId !== undefined) {
+        const byTabId = candidates.find((t) => t.tabId === recoveryTabId);
         if (byTabId) {
+          console.info(
+            `🔄 browser tab recovery via tabId profile=${profile.name} requestedTargetId=${targetId} tabId=${recoveryTabId} resolvedTargetId=${byTabId.targetId}`,
+          );
           chosen = byTabId;
+        }
+      }
+      if (!chosen && profile.driver === "extension" && requestedTargetMatchesRememberedSelection) {
+        const preferredExtensionTab = pickPreferredExtensionTab(candidates);
+        if (preferredExtensionTab) {
+          console.info(
+            `🔄 browser tab recovery via extension metadata profile=${profile.name} requestedTargetId=${targetId} resolvedTargetId=${preferredExtensionTab.targetId} tabId=${preferredExtensionTab.tabId ?? "unknown"}`,
+          );
+          chosen = preferredExtensionTab;
         }
       }
       if (!chosen && candidates.length === 1) {
         // If only one candidate remains, use it as a fallback
+        console.info(
+          `🔄 browser tab recovery via single-tab fallback profile=${profile.name} requestedTargetId=${targetId} resolvedTargetId=${candidates[0]?.targetId ?? ""}`,
+        );
         chosen = candidates[0] ?? null;
       }
     }
@@ -453,40 +576,21 @@ function createProfileContext(
       throw new Error("ambiguous target id prefix");
     }
     if (!chosen) {
+      if (targetId) {
+        throw new Error(
+          `[stale_target_id] tab not found for targetId "${targetId}" on profile "${profile.name}". ` +
+            "The page may have navigated and received a new targetId. Retry with tabId or refresh tab selection.",
+        );
+      }
       throw new Error("tab not found");
     }
-    profileState.lastTargetId = chosen.targetId;
-    // Update lastTabId for stable tracking across navigation
-    if (chosen.tabId !== undefined) {
-      profileState.lastTabId = chosen.tabId;
-    }
+    rememberSelectedTab(chosen);
     return chosen;
   };
 
-  const resolveTargetIdOrThrow = async (targetId: string): Promise<string> => {
-    const tabs = await listTabs();
-    const resolved = resolveTargetIdFromTabs(targetId, tabs);
-    if (!resolved.ok) {
-      if (resolved.reason === "ambiguous") {
-        throw new Error("ambiguous target id prefix");
-      }
-      throw new Error("tab not found");
-    }
-    return resolved.targetId;
-  };
-
-  const focusTab = async (targetId: string): Promise<void> => {
-    // Get tabs to find the matching one with its tabId
-    const tabs = await listTabs();
-    const resolved = resolveTargetIdFromTabs(targetId, tabs);
-    if (!resolved.ok) {
-      if (resolved.reason === "ambiguous") {
-        throw new Error("ambiguous target id prefix");
-      }
-      throw new Error("tab not found");
-    }
-    const resolvedTargetId = resolved.targetId;
-    const matchedTab = tabs.find((t) => t.targetId === resolvedTargetId);
+  const focusTab = async (selection: BrowserTabSelection): Promise<void> => {
+    const matchedTab = await ensureTabAvailable(selection);
+    const resolvedTargetId = matchedTab.targetId;
 
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
@@ -496,26 +600,20 @@ function createProfileContext(
         await focusPageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
+          tabId: matchedTab.tabId,
         });
-        const profileState = getProfileState();
-        profileState.lastTargetId = resolvedTargetId;
-        if (matchedTab?.tabId !== undefined) {
-          profileState.lastTabId = matchedTab.tabId;
-        }
+        rememberSelectedTab(matchedTab);
         return;
       }
     }
 
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`));
-    const profileState = getProfileState();
-    profileState.lastTargetId = resolvedTargetId;
-    if (matchedTab?.tabId !== undefined) {
-      profileState.lastTabId = matchedTab.tabId;
-    }
+    rememberSelectedTab(matchedTab);
   };
 
-  const closeTab = async (targetId: string): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
+  const closeTab = async (selection: BrowserTabSelection): Promise<void> => {
+    const matchedTab = await ensureTabAvailable(selection);
+    const resolvedTargetId = matchedTab.targetId;
 
     // For remote profiles, use Playwright's persistent connection to close tabs
     if (!profile.cdpIsLoopback) {
@@ -526,6 +624,7 @@ function createProfileContext(
         await closePageByTargetIdViaPlaywright({
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
+          tabId: matchedTab.tabId,
         });
         return;
       }
@@ -704,6 +803,12 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       return { status: 400, message: err.message };
     }
     const msg = String(err);
+    if (msg.includes("[relay_reconnecting]")) {
+      return { status: 409, message: msg.replace("[relay_reconnecting] ", "") };
+    }
+    if (msg.includes("[stale_target_id]")) {
+      return { status: 409, message: msg.replace("[stale_target_id] ", "") };
+    }
     if (msg.includes("ambiguous target id prefix")) {
       return { status: 409, message: "ambiguous target id prefix" };
     }
@@ -722,13 +827,13 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     listProfiles,
     // Legacy methods delegate to default profile
     ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
-    ensureTabAvailable: (targetId) => getDefaultContext().ensureTabAvailable(targetId),
+    ensureTabAvailable: (selection) => getDefaultContext().ensureTabAvailable(selection),
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
     isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
     listTabs: () => getDefaultContext().listTabs(),
     openTab: (url) => getDefaultContext().openTab(url),
-    focusTab: (targetId) => getDefaultContext().focusTab(targetId),
-    closeTab: (targetId) => getDefaultContext().closeTab(targetId),
+    focusTab: (selection) => getDefaultContext().focusTab(selection),
+    closeTab: (selection) => getDefaultContext().closeTab(selection),
     stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),
     resetProfile: () => getDefaultContext().resetProfile(),
     mapTabError,

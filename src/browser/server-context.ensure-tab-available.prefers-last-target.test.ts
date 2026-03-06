@@ -99,8 +99,24 @@ describe("browser server-context ensureTabAvailable", () => {
 
   it("falls back to the only attached tab when an invalid targetId is provided (extension)", async () => {
     const responses = [
-      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
-      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [
+        {
+          id: "A",
+          tabId: 7,
+          type: "page",
+          url: "https://a.example",
+          webSocketDebuggerUrl: "ws://x/a",
+        },
+      ],
+      [
+        {
+          id: "A",
+          tabId: 7,
+          type: "page",
+          url: "https://a.example",
+          webSocketDebuggerUrl: "ws://x/a",
+        },
+      ],
     ];
     stubChromeJsonList(responses);
     const state = makeBrowserState();
@@ -109,6 +125,202 @@ describe("browser server-context ensureTabAvailable", () => {
     const chrome = ctx.forProfile("chrome");
     const chosen = await chrome.ensureTabAvailable("NOT_A_TAB");
     expect(chosen.targetId).toBe("A");
+  });
+
+  it("recovers a navigated extension tab when tabId is provided with a stale targetId", async () => {
+    const responses = [
+      [
+        {
+          id: "NEW_TARGET",
+          tabId: 42,
+          type: "page",
+          url: "https://x.com/openclaw",
+          webSocketDebuggerUrl: "ws://x/new",
+        },
+      ],
+      [
+        {
+          id: "NEW_TARGET",
+          tabId: 42,
+          type: "page",
+          url: "https://x.com/openclaw",
+          webSocketDebuggerUrl: "ws://x/new",
+        },
+      ],
+    ];
+    stubChromeJsonList(responses);
+    const state = makeBrowserState();
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const chrome = ctx.forProfile("chrome");
+    const chosen = await chrome.ensureTabAvailable({ targetId: "OLD_TARGET", tabId: 42 });
+    expect(chosen.targetId).toBe("NEW_TARGET");
+    expect(chosen.tabId).toBe(42);
+  });
+
+  it("recovers the remembered stale extension targetId using primary task tab metadata when multiple tabs exist", async () => {
+    const responses = [
+      [
+        {
+          id: "USER_TAB",
+          tabId: 7,
+          type: "page",
+          url: "https://example.com",
+          webSocketDebuggerUrl: "ws://x/user",
+          windowRole: "user",
+          active: false,
+          isPrimary: false,
+          attachOrder: 1,
+        },
+        {
+          id: "TASK_TAB",
+          tabId: 42,
+          type: "page",
+          url: "https://x.com/openclaw",
+          webSocketDebuggerUrl: "ws://x/task",
+          windowRole: "task",
+          active: true,
+          isPrimary: true,
+          attachOrder: 9,
+        },
+      ],
+      [
+        {
+          id: "USER_TAB",
+          tabId: 7,
+          type: "page",
+          url: "https://example.com",
+          webSocketDebuggerUrl: "ws://x/user",
+          windowRole: "user",
+          active: false,
+          isPrimary: false,
+          attachOrder: 1,
+        },
+        {
+          id: "TASK_TAB",
+          tabId: 42,
+          type: "page",
+          url: "https://x.com/openclaw",
+          webSocketDebuggerUrl: "ws://x/task",
+          windowRole: "task",
+          active: true,
+          isPrimary: true,
+          attachOrder: 9,
+        },
+      ],
+    ];
+    stubChromeJsonList(responses);
+    const state = makeBrowserState();
+    state.profiles.set("chrome", {
+      profile: state.resolved.profiles.chrome,
+      running: null,
+      lastTargetId: "STALE_TARGET",
+      lastTabId: null,
+    });
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const chrome = ctx.forProfile("chrome");
+    const chosen = await chrome.ensureTabAvailable("STALE_TARGET");
+    expect(chosen.targetId).toBe("TASK_TAB");
+    expect(chosen.tabId).toBe(42);
+  });
+
+  it("keeps rejecting a foreign stale extension targetId when multiple tabs exist", async () => {
+    const responses = [
+      [
+        {
+          id: "USER_TAB",
+          tabId: 7,
+          type: "page",
+          url: "https://example.com",
+          webSocketDebuggerUrl: "ws://x/user",
+          windowRole: "user",
+          active: false,
+          isPrimary: false,
+          attachOrder: 1,
+        },
+        {
+          id: "TASK_TAB",
+          tabId: 42,
+          type: "page",
+          url: "https://x.com/openclaw",
+          webSocketDebuggerUrl: "ws://x/task",
+          windowRole: "task",
+          active: true,
+          isPrimary: true,
+          attachOrder: 9,
+        },
+      ],
+      [
+        {
+          id: "USER_TAB",
+          tabId: 7,
+          type: "page",
+          url: "https://example.com",
+          webSocketDebuggerUrl: "ws://x/user",
+          windowRole: "user",
+          active: false,
+          isPrimary: false,
+          attachOrder: 1,
+        },
+        {
+          id: "TASK_TAB",
+          tabId: 42,
+          type: "page",
+          url: "https://x.com/openclaw",
+          webSocketDebuggerUrl: "ws://x/task",
+          windowRole: "task",
+          active: true,
+          isPrimary: true,
+          attachOrder: 9,
+        },
+      ],
+    ];
+    stubChromeJsonList(responses);
+    const state = makeBrowserState();
+    state.profiles.set("chrome", {
+      profile: state.resolved.profiles.chrome,
+      running: null,
+      lastTargetId: "DIFFERENT_TARGET",
+      lastTabId: 42,
+    });
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const chrome = ctx.forProfile("chrome");
+    await expect(chrome.ensureTabAvailable("FOREIGN_STALE_TARGET")).rejects.toThrow(
+      /tab not found/i,
+    );
+  });
+
+  it("recovers a navigated local tab when tabId is provided with a stale targetId", async () => {
+    const responses = [
+      [
+        {
+          id: "NEW_LOCAL_TARGET",
+          tabId: 88,
+          type: "page",
+          url: "https://local.example/openclaw",
+          webSocketDebuggerUrl: "ws://x/local",
+        },
+      ],
+      [
+        {
+          id: "NEW_LOCAL_TARGET",
+          tabId: 88,
+          type: "page",
+          url: "https://local.example/openclaw",
+          webSocketDebuggerUrl: "ws://x/local",
+        },
+      ],
+    ];
+    stubChromeJsonList(responses);
+    const state = makeBrowserState();
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+    const chosen = await openclaw.ensureTabAvailable({ targetId: "OLD_LOCAL_TARGET", tabId: 88 });
+    expect(chosen.targetId).toBe("NEW_LOCAL_TARGET");
+    expect(chosen.tabId).toBe(88);
   });
 
   it("returns a descriptive message when no extension tabs are attached", async () => {

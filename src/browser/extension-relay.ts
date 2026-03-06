@@ -70,6 +70,10 @@ type AttachedToTargetEvent = {
   targetInfo: TargetInfo;
   waitingForDebugger?: boolean;
   tabId?: number; // stable Chrome tab ID (doesn't change on navigation)
+  windowRole?: "task" | "user";
+  active?: boolean;
+  isPrimary?: boolean;
+  attachOrder?: number;
 };
 
 type DetachedFromTargetEvent = {
@@ -82,6 +86,10 @@ type ConnectedTarget = {
   targetId: string;
   targetInfo: TargetInfo;
   tabId?: number; // stable Chrome tab ID (doesn't change on navigation)
+  windowRole?: "task" | "user";
+  active?: boolean;
+  isPrimary?: boolean;
+  attachOrder?: number;
 };
 
 const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
@@ -199,6 +207,38 @@ function relayAuthTokenForUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+function sortConnectedTargets(targets: ConnectedTarget[]): ConnectedTarget[] {
+  return [...targets].toSorted((left, right) => {
+    const leftTaskPrimaryScore = left.windowRole === "task" && left.isPrimary ? 0 : 1;
+    const rightTaskPrimaryScore = right.windowRole === "task" && right.isPrimary ? 0 : 1;
+    if (leftTaskPrimaryScore !== rightTaskPrimaryScore) {
+      return leftTaskPrimaryScore - rightTaskPrimaryScore;
+    }
+
+    const leftTaskScore = left.windowRole === "task" ? 0 : 1;
+    const rightTaskScore = right.windowRole === "task" ? 0 : 1;
+    if (leftTaskScore !== rightTaskScore) {
+      return leftTaskScore - rightTaskScore;
+    }
+
+    const leftPrimaryScore = left.isPrimary ? 0 : 1;
+    const rightPrimaryScore = right.isPrimary ? 0 : 1;
+    if (leftPrimaryScore !== rightPrimaryScore) {
+      return leftPrimaryScore - rightPrimaryScore;
+    }
+
+    const leftActiveScore = left.active ? 0 : 1;
+    const rightActiveScore = right.active ? 0 : 1;
+    if (leftActiveScore !== rightActiveScore) {
+      return leftActiveScore - rightActiveScore;
+    }
+
+    const leftAttachOrder = typeof left.attachOrder === "number" ? left.attachOrder : -1;
+    const rightAttachOrder = typeof right.attachOrder === "number" ? right.attachOrder : -1;
+    return rightAttachOrder - leftAttachOrder;
+  });
 }
 
 export function getChromeExtensionRelayAuthHeaders(url: string): Record<string, string> {
@@ -460,13 +500,17 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     const listPaths = new Set(["/json", "/json/", "/json/list", "/json/list/"]);
     if (listPaths.has(path) && (req.method === "GET" || req.method === "PUT")) {
-      const list = Array.from(connectedTargets.values()).map((t) => ({
+      const list = sortConnectedTargets(Array.from(connectedTargets.values())).map((t) => ({
         id: t.targetId,
         tabId: t.tabId, // stable Chrome tab ID (doesn't change on navigation)
         type: t.targetInfo.type ?? "page",
         title: t.targetInfo.title ?? "",
         description: t.targetInfo.title ?? "",
         url: t.targetInfo.url ?? "",
+        windowRole: t.windowRole,
+        active: t.active,
+        isPrimary: t.isPrimary,
+        attachOrder: t.attachOrder,
         webSocketDebuggerUrl: cdpWsUrl,
         devtoolsFrontendUrl: `/devtools/inspector.html?ws=${cdpWsUrl.replace("ws://", "")}`,
       }));
@@ -653,8 +697,18 @@ export async function ensureChromeExtensionRelayServer(opts: {
               targetId: nextTargetId,
               targetInfo: attached.targetInfo,
               tabId,
+              windowRole: attached.windowRole,
+              active: attached.active,
+              isPrimary: attached.isPrimary,
+              attachOrder: attached.attachOrder,
             });
+            console.info(
+              `🔗 relay attached sessionId=${attached.sessionId} tabId=${tabId ?? "unknown"} targetId=${nextTargetId}`,
+            );
             if (changedTarget && prevTargetId) {
+              console.info(
+                `🔄 relay target changed sessionId=${attached.sessionId} tabId=${tabId ?? "unknown"} oldTargetId=${prevTargetId} newTargetId=${nextTargetId}`,
+              );
               // Clear old targetId from all client notification sets
               for (const client of cdpClients) {
                 notifiedTargetsByClient.get(client)?.delete(prevTargetId);
@@ -695,6 +749,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
           const detached = (params ?? {}) as DetachedFromTargetEvent;
           if (detached?.sessionId) {
             const target = connectedTargets.get(detached.sessionId);
+            console.info(
+              `🔌 relay detached sessionId=${detached.sessionId} tabId=${target?.tabId ?? "unknown"} targetId=${target?.targetId ?? detached.targetId ?? "unknown"}`,
+            );
             if (target) {
               // Clear this target from all client notification sets
               for (const client of cdpClients) {
@@ -735,6 +792,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       if (extensionWs !== ws) {
         return;
       }
+      console.warn(`🔌 relay extension disconnected; clearedTargets=${connectedTargets.size}`);
       extensionWs = null;
       for (const [, pending] of pendingExtension) {
         clearTimeout(pending.timer);
