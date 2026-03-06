@@ -181,8 +181,8 @@ describe("cron tool", () => {
     });
   });
 
-  it("does not default agentId when job.agentId is null", async () => {
-    const tool = createCronTool({ agentSessionKey: "main" });
+  it("preserves explicit null agentId without session context", async () => {
+    const tool = createCronTool();
     await tool.execute("call-null", {
       action: "add",
       job: {
@@ -209,7 +209,7 @@ describe("cron tool", () => {
     expect(sessionKey).toBe(callerSessionKey);
   });
 
-  it("preserves explicit job.sessionKey on add", async () => {
+  it("binds cron.add to the caller session even when job.sessionKey is explicit", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
     const sessionKey = await executeAddAndReadSessionKey({
@@ -217,7 +217,128 @@ describe("cron tool", () => {
       agentSessionKey: "agent:main:discord:channel:ops",
       jobSessionKey: "agent:main:telegram:group:-100123:topic:99",
     });
-    expect(sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+    expect(sessionKey).toBe("agent:main:discord:channel:ops");
+  });
+
+  it("binds cron.add to the caller agent even when job.agentId is explicit", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    await tool.execute("call-agent-binding", {
+      action: "add",
+      job: {
+        name: "wake-up",
+        schedule: { at: new Date(123).toISOString() },
+        agentId: "agent-override",
+        payload: { kind: "systemEvent", text: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { agentId?: string };
+    };
+    expect(call?.params?.agentId).toBe("agent-123");
+  });
+
+  it("strips session binding changes from cron.update patches", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        jobs: [{ id: "job-1", sessionKey: "agent:main:discord:channel:ops" }],
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    await tool.execute("call-update-binding", {
+      action: "update",
+      jobId: "job-1",
+      patch: {
+        sessionKey: "agent:main:telegram:group:-100123",
+        agentId: "agent-override",
+        enabled: false,
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[1]?.[0] as {
+      params?: { patch?: Record<string, unknown> };
+    };
+    expect(call?.params).toEqual({
+      id: "job-1",
+      patch: {
+        enabled: false,
+      },
+    });
+  });
+
+  it("filters cron.list results to the caller session", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [
+        { id: "job-1", sessionKey: "agent:main:discord:channel:ops", name: "same-session" },
+        { id: "job-2", sessionKey: "agent:main:telegram:group:-100", name: "other-session" },
+      ],
+      total: 2,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    const result = await tool.execute("call-list-binding", {
+      action: "list",
+      includeDisabled: true,
+    });
+
+    expect(result.details).toEqual([
+      { id: "job-1", sessionKey: "agent:main:discord:channel:ops", name: "same-session" },
+    ]);
+  });
+
+  it("loads additional cron.list pages before filtering to the caller session", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        jobs: [
+          { id: "job-1", sessionKey: "agent:main:telegram:group:-100", name: "other-session" },
+        ],
+        hasMore: true,
+        nextOffset: 200,
+      })
+      .mockResolvedValueOnce({
+        jobs: [{ id: "job-2", sessionKey: "agent:main:discord:channel:ops", name: "same-session" }],
+        hasMore: false,
+        nextOffset: null,
+      });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    const result = await tool.execute("call-list-pages", {
+      action: "list",
+      includeDisabled: true,
+    });
+
+    expect(result.details).toEqual([
+      { id: "job-2", sessionKey: "agent:main:discord:channel:ops", name: "same-session" },
+    ]);
+  });
+
+  it("rejects cron.run for jobs outside the caller session", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [{ id: "job-2", sessionKey: "agent:main:telegram:group:-100" }],
+    });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    await expect(
+      tool.execute("call-run-cross-session", {
+        action: "run",
+        jobId: "job-2",
+      }),
+    ).rejects.toThrow("cron job does not belong to current session: job-2");
+  });
+
+  it("rejects wake for session-bound cron agents", async () => {
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:channel:ops" });
+    await expect(
+      tool.execute("call-wake-bound", {
+        action: "wake",
+        text: "hello",
+      }),
+    ).rejects.toThrow("wake is not available for session-bound cron agents");
   });
 
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
@@ -292,7 +413,7 @@ describe("cron tool", () => {
     expect(text).not.toContain("Recent context:");
   });
 
-  it("preserves explicit agentId null on add", async () => {
+  it("binds explicit null agentId on add to the caller agent", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
     const tool = createCronTool({ agentSessionKey: "main" });
@@ -311,7 +432,7 @@ describe("cron tool", () => {
       params?: { agentId?: string | null };
     };
     expect(call.method).toBe("cron.add");
-    expect(call.params?.agentId).toBeNull();
+    expect(call.params?.agentId).toBe("agent-123");
   });
 
   it("infers delivery from threaded session keys", async () => {

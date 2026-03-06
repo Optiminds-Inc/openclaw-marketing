@@ -61,6 +61,102 @@ type ChatMessage = {
   content?: unknown;
 };
 
+type CronJobLookup = {
+  id?: unknown;
+  sessionKey?: unknown;
+};
+
+type CronListLikeResult =
+  | Array<CronJobLookup>
+  | {
+      jobs?: Array<CronJobLookup>;
+      hasMore?: unknown;
+      nextOffset?: unknown;
+    };
+
+const CRON_LIST_PAGE_LIMIT = 200;
+
+function resolveBoundCronContext(agentSessionKey?: string) {
+  const rawSessionKey = agentSessionKey?.trim();
+  if (!rawSessionKey) {
+    return {};
+  }
+  const cfg = loadConfig();
+  const { mainKey, alias } = resolveMainSessionAlias(cfg);
+  const sessionKey = resolveInternalSessionKey({ key: rawSessionKey, alias, mainKey });
+  const agentId = resolveSessionAgentId({ sessionKey: rawSessionKey, config: cfg });
+  return { sessionKey, agentId };
+}
+
+function extractCronJobs(result: CronListLikeResult): CronJobLookup[] {
+  if (Array.isArray(result)) {
+    return result;
+  }
+  if (result && Array.isArray(result.jobs)) {
+    return result.jobs;
+  }
+  return [];
+}
+
+async function fetchAllCronJobs(params: {
+  gatewayOpts: GatewayCallOptions;
+  callGatewayTool: GatewayToolCaller;
+  includeDisabled?: boolean;
+}) {
+  const jobs: CronJobLookup[] = [];
+  let offset = 0;
+  for (;;) {
+    const result = await params.callGatewayTool<CronListLikeResult>(
+      "cron.list",
+      params.gatewayOpts,
+      {
+        includeDisabled: params.includeDisabled === true,
+        limit: CRON_LIST_PAGE_LIMIT,
+        offset,
+      },
+    );
+    const pageJobs = extractCronJobs(result);
+    jobs.push(...pageJobs);
+    if (Array.isArray(result)) {
+      break;
+    }
+    const hasMore = result?.hasMore === true;
+    const nextOffset =
+      typeof result?.nextOffset === "number" && Number.isFinite(result.nextOffset)
+        ? result.nextOffset
+        : null;
+    if (!hasMore || nextOffset === null || nextOffset <= offset) {
+      break;
+    }
+    offset = nextOffset;
+  }
+  return jobs;
+}
+
+async function assertCronJobBoundToSession(params: {
+  id: string;
+  sessionKey?: string;
+  gatewayOpts: GatewayCallOptions;
+  callGatewayTool: GatewayToolCaller;
+}) {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return;
+  }
+  const jobs = await fetchAllCronJobs({
+    gatewayOpts: params.gatewayOpts,
+    callGatewayTool: params.callGatewayTool,
+    includeDisabled: true,
+  });
+  const job = jobs.find((entry) => entry.id === params.id);
+  if (!job) {
+    throw new Error(`cron job not found in current session: ${params.id}`);
+  }
+  if (job.sessionKey !== sessionKey) {
+    throw new Error(`cron job does not belong to current session: ${params.id}`);
+  }
+}
+
 function stripExistingContext(text: string) {
   const index = text.indexOf(REMINDER_CONTEXT_MARKER);
   if (index === -1) {
@@ -281,12 +377,24 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
       switch (action) {
         case "status":
           return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
-        case "list":
+        case "list": {
+          const boundSessionKey = resolveBoundCronContext(opts?.agentSessionKey).sessionKey;
+          if (boundSessionKey) {
+            return jsonResult(
+              await fetchAllCronJobs({
+                gatewayOpts,
+                callGatewayTool: callGateway,
+                includeDisabled: Boolean(params.includeDisabled),
+              }).then((jobs) => jobs.filter((job) => job.sessionKey === boundSessionKey)),
+            );
+          }
           return jsonResult(
             await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
+              limit: CRON_LIST_PAGE_LIMIT,
             }),
           );
+        }
         case "add": {
           // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
           // job properties to the top level alongside `action` instead of nesting
@@ -345,21 +453,12 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
           const job = normalizeCronJobCreate(params.job) ?? params.job;
           if (job && typeof job === "object") {
-            const cfg = loadConfig();
-            const { mainKey, alias } = resolveMainSessionAlias(cfg);
-            const resolvedSessionKey = opts?.agentSessionKey
-              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
-              : undefined;
-            if (!("agentId" in job)) {
-              const agentId = opts?.agentSessionKey
-                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
-                : undefined;
-              if (agentId) {
-                (job as { agentId?: string }).agentId = agentId;
-              }
+            const boundContext = resolveBoundCronContext(opts?.agentSessionKey);
+            if (boundContext.agentId) {
+              (job as { agentId?: string }).agentId = boundContext.agentId;
             }
-            if (!("sessionKey" in job) && resolvedSessionKey) {
-              (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
+            if (boundContext.sessionKey) {
+              (job as { sessionKey?: string }).sessionKey = boundContext.sessionKey;
             }
           }
 
@@ -439,6 +538,21 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             throw new Error("patch required");
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
+          if (patch && typeof patch === "object") {
+            const boundContext = resolveBoundCronContext(opts?.agentSessionKey);
+            if (boundContext.agentId) {
+              delete (patch as { agentId?: unknown }).agentId;
+            }
+            if (boundContext.sessionKey) {
+              delete (patch as { sessionKey?: unknown }).sessionKey;
+            }
+          }
+          await assertCronJobBoundToSession({
+            id,
+            sessionKey: resolveBoundCronContext(opts?.agentSessionKey).sessionKey,
+            gatewayOpts,
+            callGatewayTool: callGateway,
+          });
           return jsonResult(
             await callGateway("cron.update", gatewayOpts, {
               id,
@@ -451,6 +565,12 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
+          await assertCronJobBoundToSession({
+            id,
+            sessionKey: resolveBoundCronContext(opts?.agentSessionKey).sessionKey,
+            gatewayOpts,
+            callGatewayTool: callGateway,
+          });
           return jsonResult(await callGateway("cron.remove", gatewayOpts, { id }));
         }
         case "run": {
@@ -460,6 +580,12 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
           const runMode =
             params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
+          await assertCronJobBoundToSession({
+            id,
+            sessionKey: resolveBoundCronContext(opts?.agentSessionKey).sessionKey,
+            gatewayOpts,
+            callGatewayTool: callGateway,
+          });
           return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {
@@ -467,9 +593,18 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           if (!id) {
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
+          await assertCronJobBoundToSession({
+            id,
+            sessionKey: resolveBoundCronContext(opts?.agentSessionKey).sessionKey,
+            gatewayOpts,
+            callGatewayTool: callGateway,
+          });
           return jsonResult(await callGateway("cron.runs", gatewayOpts, { id }));
         }
         case "wake": {
+          if (opts?.agentSessionKey) {
+            throw new Error("wake is not available for session-bound cron agents");
+          }
           const text = readStringParam(params, "text", { required: true });
           const mode =
             params.mode === "now" || params.mode === "next-heartbeat"
