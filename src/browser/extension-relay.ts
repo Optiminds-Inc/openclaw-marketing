@@ -225,6 +225,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
   let extensionWs: WebSocket | null = null;
   const cdpClients = new Set<WebSocket>();
   const connectedTargets = new Map<string, ConnectedTarget>();
+  // Track which targets have been notified to each CDP client to prevent duplicates
+  const notifiedTargetsByClient = new WeakMap<WebSocket, Set<string>>();
   const extensionConnected = () => extensionWs?.readyState === WebSocket.OPEN;
 
   const pendingExtension = new Map<
@@ -270,7 +272,17 @@ export async function ensureChromeExtensionRelayServer(opts: {
   };
 
   const ensureTargetEventsForClient = (ws: WebSocket, mode: "autoAttach" | "discover") => {
+    let notified = notifiedTargetsByClient.get(ws);
+    if (!notified) {
+      notified = new Set<string>();
+      notifiedTargetsByClient.set(ws, notified);
+    }
     for (const target of connectedTargets.values()) {
+      // Skip if this target was already notified to this client (prevent duplicates)
+      if (notified.has(target.targetId)) {
+        continue;
+      }
+      notified.add(target.targetId);
       if (mode === "autoAttach") {
         ws.send(
           JSON.stringify({
@@ -346,6 +358,16 @@ export async function ensureChromeExtensionRelayServer(opts: {
           }
         }
         throw new Error("target not found");
+      }
+      // Chrome Extension's chrome.debugger API cannot attach to the browser target itself,
+      // only to specific tabs. Return the first connected page's sessionId as a fallback
+      // so Playwright can continue with page-level operations.
+      case "Target.attachToBrowserTarget": {
+        const first = Array.from(connectedTargets.values())[0];
+        if (first) {
+          return { sessionId: first.sessionId };
+        }
+        throw new Error("No targets connected for browser session fallback");
       }
       default: {
         const id = nextExtensionId++;
@@ -601,6 +623,10 @@ export async function ensureChromeExtensionRelayServer(opts: {
               targetInfo: attached.targetInfo,
             });
             if (changedTarget && prevTargetId) {
+              // Clear old targetId from all client notification sets
+              for (const client of cdpClients) {
+                notifiedTargetsByClient.get(client)?.delete(prevTargetId);
+              }
               broadcastToCdpClients({
                 method: "Target.detachedFromTarget",
                 params: { sessionId: attached.sessionId, targetId: prevTargetId },
@@ -608,6 +634,15 @@ export async function ensureChromeExtensionRelayServer(opts: {
               });
             }
             if (!prev || changedTarget) {
+              // Track that we're notifying all clients about this target
+              for (const client of cdpClients) {
+                let notified = notifiedTargetsByClient.get(client);
+                if (!notified) {
+                  notified = new Set<string>();
+                  notifiedTargetsByClient.set(client, notified);
+                }
+                notified.add(nextTargetId);
+              }
               broadcastToCdpClients({ method, params, sessionId });
             }
             return;
@@ -617,6 +652,13 @@ export async function ensureChromeExtensionRelayServer(opts: {
         if (method === "Target.detachedFromTarget") {
           const detached = (params ?? {}) as DetachedFromTargetEvent;
           if (detached?.sessionId) {
+            const target = connectedTargets.get(detached.sessionId);
+            if (target) {
+              // Clear this target from all client notification sets
+              for (const client of cdpClients) {
+                notifiedTargetsByClient.get(client)?.delete(target.targetId);
+              }
+            }
             connectedTargets.delete(detached.sessionId);
           }
           broadcastToCdpClients({ method, params, sessionId });
@@ -716,16 +758,25 @@ export async function ensureChromeExtensionRelayServer(opts: {
               (t) => t.targetId === targetId,
             );
             if (target) {
-              ws.send(
-                JSON.stringify({
-                  method: "Target.attachedToTarget",
-                  params: {
-                    sessionId: target.sessionId,
-                    targetInfo: { ...target.targetInfo, attached: true },
-                    waitingForDebugger: false,
-                  },
-                } satisfies CdpEvent),
-              );
+              // Only send attachedToTarget if this client hasn't been notified yet
+              let notified = notifiedTargetsByClient.get(ws);
+              if (!notified) {
+                notified = new Set<string>();
+                notifiedTargetsByClient.set(ws, notified);
+              }
+              if (!notified.has(targetId)) {
+                notified.add(targetId);
+                ws.send(
+                  JSON.stringify({
+                    method: "Target.attachedToTarget",
+                    params: {
+                      sessionId: target.sessionId,
+                      targetInfo: { ...target.targetInfo, attached: true },
+                      waitingForDebugger: false,
+                    },
+                  } satisfies CdpEvent),
+                );
+              }
             }
           }
         }

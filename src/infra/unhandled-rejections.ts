@@ -54,6 +54,18 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "temporary failure in name resolution",
 ];
 
+// Playwright/browser internal errors that shouldn't crash the gateway
+// These are typically race conditions or stale state issues that resolve on reconnect
+const PLAYWRIGHT_RECOVERABLE_PATTERNS = [
+  "Duplicate target",
+  "Target closed",
+  "Protocol error",
+  "Session closed",
+  "Browser has been closed",
+  "Execution context was destroyed",
+  "Assertion error", // Playwright internal assertion (e.g., duplicate target attachment)
+];
+
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -208,6 +220,39 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks if an error is a recoverable Playwright/browser error.
+ * These are typically race conditions or stale state issues (e.g., attaching to
+ * a target that was already attached) that shouldn't crash the gateway.
+ */
+export function isPlaywrightRecoverableError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const message = typeof rawMessage === "string" ? rawMessage : "";
+    if (!message) {
+      continue;
+    }
+    // Check stack trace for Playwright origin
+    const stack = (candidate as { stack?: unknown }).stack;
+    const isPlaywrightError =
+      typeof stack === "string" &&
+      (stack.includes("playwright-core") || stack.includes("playwright/"));
+
+    if (isPlaywrightError) {
+      if (PLAYWRIGHT_RECOVERABLE_PATTERNS.some((pattern) => message.includes(pattern))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -259,6 +304,14 @@ export function installUnhandledRejectionHandler(): void {
     if (isTransientNetworkError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    if (isPlaywrightRecoverableError(reason)) {
+      console.warn(
+        "[openclaw] Non-fatal Playwright error (continuing):",
         formatUncaughtError(reason),
       );
       return;

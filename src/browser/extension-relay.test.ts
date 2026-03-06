@@ -475,6 +475,106 @@ describe("chrome extension relay server", () => {
     ext.close();
   });
 
+  it("prevents duplicate attachedToTarget events to the same CDP client", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
+    await waitForOpen(ext);
+
+    // Simulate extension attaching a target
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "session-1",
+            targetInfo: {
+              targetId: "target-1",
+              type: "page",
+              title: "Test Page",
+              url: "https://example.com",
+            },
+            waitingForDebugger: false,
+          },
+        },
+      }),
+    );
+
+    // Wait for target to be registered
+    await new Promise((r) => setTimeout(r, 50));
+
+    // CDP client connects
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    const q = createMessageQueue(cdp);
+    await waitForOpen(cdp);
+
+    // CDP client sends Target.setAutoAttach - should receive attachedToTarget once
+    cdp.send(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+
+    // Collect messages (response + attachedToTarget event)
+    const received1: Array<{ id?: number; method?: string; params?: unknown }> = [];
+    received1.push(JSON.parse(await q.next()) as never);
+    received1.push(JSON.parse(await q.next()) as never);
+
+    const response1 = received1.find((m) => m.id === 1);
+    expect(response1?.id).toBe(1);
+
+    const attached1 = received1.find((m) => m.method === "Target.attachedToTarget");
+    expect(attached1?.method).toBe("Target.attachedToTarget");
+    expect(JSON.stringify(attached1?.params ?? {})).toContain("target-1");
+
+    // Count attachedToTarget events so far (should be 1)
+    const attachedCount1 = received1.filter((m) => m.method === "Target.attachedToTarget").length;
+    expect(attachedCount1).toBe(1);
+
+    // CDP client sends Target.attachToTarget for the same target
+    // Due to our fix, this should NOT send another attachedToTarget event
+    cdp.send(
+      JSON.stringify({ id: 2, method: "Target.attachToTarget", params: { targetId: "target-1" } }),
+    );
+
+    // We should only receive the response (no additional attachedToTarget)
+    const response2 = JSON.parse(await q.next()) as {
+      id?: number;
+      result?: { sessionId?: string };
+    };
+    expect(response2.id).toBe(2);
+    expect(response2.result?.sessionId).toBe("session-1");
+
+    // Try to read one more message with a short timeout - should timeout (no more messages)
+    let gotExtra = false;
+    try {
+      const extra = await Promise.race([
+        q.next(100),
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
+      ]);
+      if (extra !== "timeout") {
+        const parsed = JSON.parse(extra) as { method?: string };
+        // If we got an extra attachedToTarget, that's a duplicate (test should fail)
+        if (parsed.method === "Target.attachedToTarget") {
+          gotExtra = true;
+        }
+      }
+    } catch {
+      // Timeout is expected - no extra messages
+    }
+
+    // Verify no duplicate attachedToTarget events were sent
+    expect(gotExtra).toBe(false);
+
+    cdp.close();
+    ext.close();
+  });
+
   it("reuses an already-bound relay port when another process owns it", async () => {
     const port = await getFreePort();
     let probeToken: string | undefined;
