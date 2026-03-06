@@ -187,6 +187,7 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
+        skipAgentEnabledCheck: true,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },

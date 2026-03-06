@@ -697,6 +697,15 @@ export async function executeJobCore(
 
       if (heartbeatResult.status === "ran") {
         return { status: "ok", summary: text };
+      } else if (heartbeatResult.status === "skipped" && heartbeatResult.reason === "disabled") {
+        // Heartbeat disabled for this agent; fall back to fire-and-forget wake.
+        // System event was already enqueued above.
+        state.deps.requestHeartbeatNow({
+          reason: `cron:${job.id}`,
+          agentId: job.agentId,
+          sessionKey: job.sessionKey,
+        });
+        return { status: "ok", summary: text };
       } else if (heartbeatResult.status === "skipped") {
         return { status: "skipped", error: heartbeatResult.reason, summary: text };
       } else {
