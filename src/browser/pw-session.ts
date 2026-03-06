@@ -388,6 +388,7 @@ async function findPageByTargetId(
   browser: Browser,
   targetId: string,
   cdpUrl?: string,
+  tabId?: number,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
   let resolvedViaCdp = false;
@@ -424,8 +425,15 @@ async function findPageByTargetId(
           id: string;
           url: string;
           title?: string;
+          tabId?: number;
         }>;
-        const target = targets.find((t) => t.id === targetId);
+        // First try to find by targetId
+        let target = targets.find((t) => t.id === targetId);
+        // If not found by targetId but we have tabId, try to find by tabId
+        // This handles cross-origin navigation where targetId changes but tabId stays the same
+        if (!target && tabId !== undefined) {
+          target = targets.find((t) => t.tabId === tabId);
+        }
         if (target) {
           // Try to find a page with matching URL
           const urlMatch = pages.filter((p) => p.url() === target.url);
@@ -437,7 +445,7 @@ async function findPageByTargetId(
           if (urlMatch.length > 1) {
             const sameUrlTargets = targets.filter((t) => t.url === target.url);
             if (sameUrlTargets.length === urlMatch.length) {
-              const idx = sameUrlTargets.findIndex((t) => t.id === targetId);
+              const idx = sameUrlTargets.findIndex((t) => t.id === target.id);
               if (idx >= 0 && idx < urlMatch.length) {
                 return urlMatch[idx];
               }
@@ -455,6 +463,7 @@ async function findPageByTargetId(
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
 }): Promise<Page> {
   const { browser } = await connectBrowser(opts.cdpUrl);
   const pages = await getAllPages(browser);
@@ -465,7 +474,7 @@ export async function getPageForTargetId(opts: {
   if (!opts.targetId) {
     return first;
   }
-  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl, opts.tabId);
   if (!found) {
     // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
     // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright

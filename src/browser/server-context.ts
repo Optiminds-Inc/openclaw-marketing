@@ -432,14 +432,21 @@ function createProfileContext(
     };
 
     let chosen = targetId ? resolveById(targetId) : pickDefault();
-    if (
-      !chosen &&
-      (profile.driver === "extension" || !profile.cdpIsLoopback) &&
-      candidates.length === 1
-    ) {
-      // If an agent passes a stale/foreign targetId but only one candidate remains,
-      // recover by using that tab instead of failing hard.
-      chosen = candidates[0] ?? null;
+    if (!chosen && targetId && (profile.driver === "extension" || !profile.cdpIsLoopback)) {
+      // If an agent passes a stale/foreign targetId, try to recover:
+      // 1. Use lastTabId if available (handles cross-origin navigation where targetId changes)
+      // 2. Fall back to single-tab recovery
+      const lastTab = profileState.lastTabId;
+      if (lastTab !== null && lastTab !== undefined) {
+        const byTabId = candidates.find((t) => t.tabId === lastTab);
+        if (byTabId) {
+          chosen = byTabId;
+        }
+      }
+      if (!chosen && candidates.length === 1) {
+        // If only one candidate remains, use it as a fallback
+        chosen = candidates[0] ?? null;
+      }
     }
 
     if (chosen === "AMBIGUOUS") {
