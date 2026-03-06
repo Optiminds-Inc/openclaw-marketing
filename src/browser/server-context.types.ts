@@ -13,6 +13,8 @@ export type ProfileRuntimeState = {
   running: RunningChrome | null;
   /** Sticky tab selection when callers omit targetId (keeps snapshot+act consistent). */
   lastTargetId?: string | null;
+  /** Stable Chrome tab ID - doesn't change on navigation, used as fallback when lastTargetId is stale. */
+  lastTabId?: number | null;
 };
 
 export type BrowserServerState = {

@@ -54,6 +54,7 @@ type ExtensionPongMessage = { method: "pong" };
 type ExtensionMessage =
   | ExtensionResponseMessage
   | ExtensionForwardEventMessage
+  | ExtensionPingMessage
   | ExtensionPongMessage;
 
 type TargetInfo = {
@@ -68,6 +69,7 @@ type AttachedToTargetEvent = {
   sessionId: string;
   targetInfo: TargetInfo;
   waitingForDebugger?: boolean;
+  tabId?: number; // stable Chrome tab ID (doesn't change on navigation)
 };
 
 type DetachedFromTargetEvent = {
@@ -79,6 +81,7 @@ type ConnectedTarget = {
   sessionId: string;
   targetId: string;
   targetInfo: TargetInfo;
+  tabId?: number; // stable Chrome tab ID (doesn't change on navigation)
 };
 
 const RELAY_AUTH_HEADER = "x-openclaw-relay-token";
@@ -328,6 +331,20 @@ export async function ensureChromeExtensionRelayServer(opts: {
           })),
         };
       case "Target.getTargetInfo": {
+        // For child sessions (real Chrome session IDs), forward to Chrome
+        // Only use local cache for the extension's main sessions (cb-tab-xxx)
+        if (cmd.sessionId && !connectedTargets.has(cmd.sessionId)) {
+          const id = nextExtensionId++;
+          return await sendToExtension({
+            id,
+            method: "forwardCDPCommand",
+            params: {
+              method: "Target.getTargetInfo",
+              sessionId: cmd.sessionId,
+              params: cmd.params,
+            },
+          });
+        }
         const params = (cmd.params ?? {}) as { targetId?: string };
         const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
         if (targetId) {
@@ -347,17 +364,22 @@ export async function ensureChromeExtensionRelayServer(opts: {
         return { targetInfo: first?.targetInfo };
       }
       case "Target.attachToTarget": {
-        const params = (cmd.params ?? {}) as { targetId?: string };
-        const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
-        if (!targetId) {
-          throw new Error("targetId required");
-        }
-        for (const t of connectedTargets.values()) {
-          if (t.targetId === targetId) {
-            return { sessionId: t.sessionId };
-          }
-        }
-        throw new Error("target not found");
+        // Forward to Chrome to create a real CDP child session.
+        // Previously we returned the extension's fake session ID (cb-tab-xxx), but this
+        // caused session invalidation errors during SPA navigation because Playwright
+        // expected a real Chrome CDP session that tracks execution context properly.
+        const id = nextExtensionId++;
+        const result = await sendToExtension({
+          id,
+          method: "forwardCDPCommand",
+          params: {
+            method: "Target.attachToTarget",
+            sessionId: cmd.sessionId,
+            params: cmd.params,
+          },
+        });
+        // Chrome returns {sessionId: "real-session-id"} - forward it to Playwright
+        return result;
       }
       // Chrome Extension's chrome.debugger API cannot attach to the browser target itself,
       // only to specific tabs. Return the first connected page's sessionId as a fallback
@@ -440,6 +462,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     if (listPaths.has(path) && (req.method === "GET" || req.method === "PUT")) {
       const list = Array.from(connectedTargets.values()).map((t) => ({
         id: t.targetId,
+        tabId: t.tabId, // stable Chrome tab ID (doesn't change on navigation)
         type: t.targetInfo.type ?? "page",
         title: t.targetInfo.title ?? "",
         description: t.targetInfo.title ?? "",
@@ -595,6 +618,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
         if ((parsed as ExtensionPongMessage).method === "pong") {
           return;
         }
+        // Respond to ping from extension with pong
+        if ((parsed as ExtensionPingMessage).method === "ping") {
+          const pingMsg = parsed as { method: "ping"; id?: number };
+          ws.send(JSON.stringify({ method: "pong", id: pingMsg.id }));
+          return;
+        }
         if ((parsed as ExtensionForwardEventMessage).method !== "forwardCDPEvent") {
           return;
         }
@@ -617,10 +646,13 @@ export async function ensureChromeExtensionRelayServer(opts: {
             const nextTargetId = attached.targetInfo.targetId;
             const prevTargetId = prev?.targetId;
             const changedTarget = Boolean(prev && prevTargetId && prevTargetId !== nextTargetId);
+            // tabId is stable across navigation; preserve from previous or use new value
+            const tabId = attached.tabId ?? prev?.tabId;
             connectedTargets.set(attached.sessionId, {
               sessionId: attached.sessionId,
               targetId: nextTargetId,
               targetInfo: attached.targetInfo,
+              tabId,
             });
             if (changedTarget && prevTargetId) {
               // Clear old targetId from all client notification sets
@@ -634,6 +666,16 @@ export async function ensureChromeExtensionRelayServer(opts: {
               });
             }
             if (!prev || changedTarget) {
+              // Check if any client already received this targetId (prevents duplicate target errors)
+              // This can happen when same target re-attaches with a new sessionId (e.g., after navigation)
+              const alreadyNotified = Array.from(cdpClients).some((client) => {
+                const notified = notifiedTargetsByClient.get(client);
+                return notified?.has(nextTargetId);
+              });
+              if (alreadyNotified) {
+                // Target already known to clients - just update our internal state, don't re-broadcast
+                return;
+              }
               // Track that we're notifying all clients about this target
               for (const client of cdpClients) {
                 let notified = notifiedTargetsByClient.get(client);

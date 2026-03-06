@@ -64,6 +64,7 @@ const PLAYWRIGHT_RECOVERABLE_PATTERNS = [
   "Browser has been closed",
   "Execution context was destroyed",
   "Assertion error", // Playwright internal assertion (e.g., duplicate target attachment)
+  "No session with given id", // CDP session invalidated (tab closed, page navigated away)
 ];
 
 function getErrorCause(err: unknown): unknown {

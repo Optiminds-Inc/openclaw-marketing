@@ -41,6 +41,7 @@ export type BrowserResetProfileResult = {
 
 export type BrowserTab = {
   targetId: string;
+  tabId?: number; // stable Chrome tab ID (doesn't change on navigation)
   title: string;
   url: string;
   wsUrl?: string;

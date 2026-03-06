@@ -18,6 +18,10 @@ let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
 
+export function getBrowserServerState(): BrowserServerState | null {
+  return state;
+}
+
 export async function startBrowserControlServerFromConfig(): Promise<BrowserServerState | null> {
   if (state) {
     return state;

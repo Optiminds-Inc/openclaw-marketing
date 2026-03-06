@@ -89,7 +89,7 @@ function createProfileContext(
     const current = state();
     let profileState = current.profiles.get(profile.name);
     if (!profileState) {
-      profileState = { profile, running: null, lastTargetId: null };
+      profileState = { profile, running: null, lastTargetId: null, lastTabId: null };
       current.profiles.set(profile.name, profileState);
     }
     return profileState;
@@ -101,8 +101,11 @@ function createProfileContext(
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
-    // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
-    if (!profile.cdpIsLoopback) {
+    // For remote profiles (non-extension), use Playwright's persistent connection.
+    // Extension profiles use HTTP /json/list directly because extension-relay
+    // maintains connectedTargets which includes ALL tabs (including CDP-created ones).
+    // Playwright's page list only includes tabs created through Playwright API.
+    if (!profile.cdpIsLoopback && profile.driver !== "extension") {
       const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
@@ -119,6 +122,7 @@ function createProfileContext(
     const raw = await fetchJson<
       Array<{
         id?: string;
+        tabId?: number;
         title?: string;
         url?: string;
         webSocketDebuggerUrl?: string;
@@ -128,6 +132,7 @@ function createProfileContext(
     return raw
       .map((t) => ({
         targetId: t.id ?? "",
+        tabId: t.tabId, // stable Chrome tab ID (doesn't change on navigation)
         title: t.title ?? "",
         url: t.url ?? "",
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
@@ -177,6 +182,10 @@ function createProfileContext(
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
+          // Update lastTabId for stable tracking across navigation
+          if (found.tabId !== undefined) {
+            profileState.lastTabId = found.tabId;
+          }
           await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
           return found;
         }
@@ -303,10 +312,10 @@ function createProfileContext(
       if (await isReachable(600)) {
         return;
       }
-      // Relay server is up, but no attached tab yet. Prompt user to attach.
-      throw new Error(
-        `Chrome extension relay is running, but no tab is connected. Click the OpenClaw Chrome extension icon on a tab to attach it (profile "${profile.name}").`,
-      );
+      // Relay server is up, but no attached tab yet.
+      // Extension will auto-create a tab when first CDP command is received.
+      // Continue without error - let the first command trigger tab creation.
+      return;
     }
 
     if (!httpReachable) {
@@ -403,12 +412,21 @@ function createProfileContext(
     };
 
     const pickDefault = () => {
+      // Priority 1: Use lastTabId (stable across navigation)
+      const lastTab = profileState.lastTabId;
+      if (lastTab !== null && lastTab !== undefined) {
+        const byTabId = candidates.find((t) => t.tabId === lastTab);
+        if (byTabId) {
+          return byTabId;
+        }
+      }
+      // Priority 2: Fall back to lastTargetId (may be stale after navigation)
       const last = profileState.lastTargetId?.trim() || "";
       const lastResolved = last ? resolveById(last) : null;
       if (lastResolved && lastResolved !== "AMBIGUOUS") {
         return lastResolved;
       }
-      // Prefer a real page tab first (avoid service workers/background targets).
+      // Priority 3: Pick first page tab (avoid service workers/background targets).
       const page = candidates.find((t) => (t.type ?? "page") === "page");
       return page ?? candidates.at(0) ?? null;
     };
@@ -431,6 +449,10 @@ function createProfileContext(
       throw new Error("tab not found");
     }
     profileState.lastTargetId = chosen.targetId;
+    // Update lastTabId for stable tracking across navigation
+    if (chosen.tabId !== undefined) {
+      profileState.lastTabId = chosen.tabId;
+    }
     return chosen;
   };
 
@@ -447,7 +469,17 @@ function createProfileContext(
   };
 
   const focusTab = async (targetId: string): Promise<void> => {
-    const resolvedTargetId = await resolveTargetIdOrThrow(targetId);
+    // Get tabs to find the matching one with its tabId
+    const tabs = await listTabs();
+    const resolved = resolveTargetIdFromTabs(targetId, tabs);
+    if (!resolved.ok) {
+      if (resolved.reason === "ambiguous") {
+        throw new Error("ambiguous target id prefix");
+      }
+      throw new Error("tab not found");
+    }
+    const resolvedTargetId = resolved.targetId;
+    const matchedTab = tabs.find((t) => t.targetId === resolvedTargetId);
 
     if (!profile.cdpIsLoopback) {
       const mod = await getPwAiModule({ mode: "strict" });
@@ -460,6 +492,9 @@ function createProfileContext(
         });
         const profileState = getProfileState();
         profileState.lastTargetId = resolvedTargetId;
+        if (matchedTab?.tabId !== undefined) {
+          profileState.lastTabId = matchedTab.tabId;
+        }
         return;
       }
     }
@@ -467,6 +502,9 @@ function createProfileContext(
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolvedTargetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolvedTargetId;
+    if (matchedTab?.tabId !== undefined) {
+      profileState.lastTabId = matchedTab.tabId;
+    }
   };
 
   const closeTab = async (targetId: string): Promise<void> => {

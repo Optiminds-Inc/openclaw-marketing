@@ -4,6 +4,7 @@ import { resolveBrowserConfig } from "./config.js";
 import { ensureBrowserControlAuth } from "./control-auth.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
+import { getBrowserServerState } from "./server.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -15,12 +16,19 @@ export function getBrowserControlState(): BrowserServerState | null {
 
 export function createBrowserControlContext() {
   return createBrowserRouteContext({
-    getState: () => state,
+    getState: () => getBrowserServerState() ?? state,
     refreshConfigFromDisk: true,
   });
 }
 
 export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
+  // Reuse HTTP server state if available (Gateway scenario)
+  const serverState = getBrowserServerState();
+  if (serverState) {
+    return serverState;
+  }
+
+  // Standalone mode: use own state
   if (state) {
     return state;
   }
