@@ -24,6 +24,13 @@ Control user's Chrome browser tabs via the OpenClaw Browser Relay extension.
 - Filling forms, logging in, or multi-step web workflows
 - Web scraping that requires JavaScript rendering
 
+## Best Practices
+
+- **Always use profile="chrome"** - This is the default and works with the Chrome extension relay
+- **Prefer opening new tabs** for new tasks to avoid disrupting the user's current work
+- Use `action=open` with `targetUrl` to open URLs in new tabs
+- Keep track of `targetId` when working with multiple tabs
+
 ## When NOT to Use
 
 ❌ **DON'T use this skill when:**
@@ -184,8 +191,10 @@ If tab not found with targetId:
 
 ## Notes
 
-- Always use `--profile chrome` for all commands
+- **Always use `--profile chrome`** for all commands (this is mandatory)
+- **Prefer opening new tabs** for new URLs to avoid disrupting user's current work
 - User must manually attach tabs via the extension (click toolbar icon)
 - Keep track of `targetId` when working with multiple tabs
 - Prefer `snapshot` + `act` over coordinate-based interactions
 - For forms, use `snapshot` to find input refs, then `act` with `kind:"type"`
+- If relay times out, ask user to check the Chrome extension connection

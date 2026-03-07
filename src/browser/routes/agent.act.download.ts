@@ -1,5 +1,9 @@
 import type { BrowserRouteContext } from "../server-context.js";
-import { readBody, resolveTargetIdFromBody, withPlaywrightRouteContext } from "./agent.shared.js";
+import {
+  readBody,
+  resolveTabSelectionFromBody,
+  withPlaywrightRouteContext,
+} from "./agent.shared.js";
 import { ensureOutputRootDir, resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -19,7 +23,7 @@ export function registerBrowserAgentActDownloadRoutes(
 ) {
   app.post("/wait/download", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const selection = resolveTabSelectionFromBody(body);
     const out = toStringOrEmpty(body.path) || "";
     const timeoutMs = toNumber(body.timeoutMs);
 
@@ -27,7 +31,7 @@ export function registerBrowserAgentActDownloadRoutes(
       req,
       res,
       ctx,
-      targetId,
+      selection,
       feature: "wait for download",
       run: async ({ cdpUrl, tab, pw }) => {
         await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
@@ -44,19 +48,28 @@ export function registerBrowserAgentActDownloadRoutes(
           }
           downloadPath = resolvedDownloadPath;
         }
-        const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
+        const requestBase = {
+          ...buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs),
+          tabId: tab.tabId,
+        };
         const result = await pw.waitForDownloadViaPlaywright({
           ...requestBase,
           path: downloadPath,
         });
-        res.json({ ok: true, targetId: tab.targetId, download: result });
+        res.json({
+          ok: true,
+          targetId: tab.targetId,
+          tabId: tab.tabId,
+          url: tab.url,
+          download: result,
+        });
       },
     });
   });
 
   app.post("/download", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const selection = resolveTabSelectionFromBody(body);
     const ref = toStringOrEmpty(body.ref);
     const out = toStringOrEmpty(body.path);
     const timeoutMs = toNumber(body.timeoutMs);
@@ -71,7 +84,7 @@ export function registerBrowserAgentActDownloadRoutes(
       req,
       res,
       ctx,
-      targetId,
+      selection,
       feature: "download",
       run: async ({ cdpUrl, tab, pw }) => {
         await ensureOutputRootDir(DEFAULT_DOWNLOAD_DIR);
@@ -84,13 +97,22 @@ export function registerBrowserAgentActDownloadRoutes(
         if (!downloadPath) {
           return;
         }
-        const requestBase = buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs);
+        const requestBase = {
+          ...buildDownloadRequestBase(cdpUrl, tab.targetId, timeoutMs),
+          tabId: tab.tabId,
+        };
         const result = await pw.downloadViaPlaywright({
           ...requestBase,
           ref,
           path: downloadPath,
         });
-        res.json({ ok: true, targetId: tab.targetId, download: result });
+        res.json({
+          ok: true,
+          targetId: tab.targetId,
+          tabId: tab.tabId,
+          url: tab.url,
+          download: result,
+        });
       },
     });
   });

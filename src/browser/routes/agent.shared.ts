@@ -1,6 +1,11 @@
 import type { PwAiModule } from "../pw-ai-module.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type {
+  BrowserRouteContext,
+  BrowserTab,
+  BrowserTabSelection,
+  ProfileContext,
+} from "../server-context.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 import { getProfileContext, jsonError } from "./utils.js";
 
@@ -27,9 +32,47 @@ export function resolveTargetIdFromBody(body: Record<string, unknown>): string |
   return targetId || undefined;
 }
 
+export function resolveTabIdFromBody(body: Record<string, unknown>): number | undefined {
+  const rawTabId = body.tabId;
+  if (typeof rawTabId !== "number" || !Number.isFinite(rawTabId)) {
+    return undefined;
+  }
+  return Math.floor(rawTabId);
+}
+
+export function resolveTabSelectionFromBody(
+  body: Record<string, unknown>,
+): BrowserTabSelection | undefined {
+  const targetId = resolveTargetIdFromBody(body);
+  const tabId = resolveTabIdFromBody(body);
+  if (!targetId && tabId === undefined) {
+    return undefined;
+  }
+  return { targetId, tabId };
+}
+
 export function resolveTargetIdFromQuery(query: Record<string, unknown>): string | undefined {
   const targetId = typeof query.targetId === "string" ? query.targetId.trim() : "";
   return targetId || undefined;
+}
+
+export function resolveTabIdFromQuery(query: Record<string, unknown>): number | undefined {
+  const rawTabId = typeof query.tabId === "string" ? Number(query.tabId) : undefined;
+  if (typeof rawTabId !== "number" || !Number.isFinite(rawTabId)) {
+    return undefined;
+  }
+  return Math.floor(rawTabId);
+}
+
+export function resolveTabSelectionFromQuery(
+  query: Record<string, unknown>,
+): BrowserTabSelection | undefined {
+  const targetId = resolveTargetIdFromQuery(query);
+  const tabId = resolveTabIdFromQuery(query);
+  if (!targetId && tabId === undefined) {
+    return undefined;
+  }
+  return { targetId, tabId };
 }
 
 export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
@@ -92,6 +135,7 @@ type RouteWithTabParams<T> = {
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   targetId?: string;
+  selection?: BrowserTabSelection;
   run: (ctx: RouteTabContext) => Promise<T>;
 };
 
@@ -103,7 +147,7 @@ export async function withRouteTabContext<T>(
     return undefined;
   }
   try {
-    const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    const tab = await profileCtx.ensureTabAvailable(params.selection ?? params.targetId);
     return await params.run({
       profileCtx,
       tab,
@@ -120,6 +164,7 @@ type RouteWithPwParams<T> = {
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   targetId?: string;
+  selection?: BrowserTabSelection;
   feature: string;
   run: (ctx: RouteTabPwContext) => Promise<T>;
 };
@@ -132,6 +177,7 @@ export async function withPlaywrightRouteContext<T>(
     res: params.res,
     ctx: params.ctx,
     targetId: params.targetId,
+    selection: params.selection,
     run: async ({ profileCtx, tab, cdpUrl }) => {
       const pw = await requirePwAi(params.res, params.feature);
       if (!pw) {
@@ -139,5 +185,18 @@ export async function withPlaywrightRouteContext<T>(
       }
       return await params.run({ profileCtx, tab, cdpUrl, pw });
     },
+  });
+}
+
+export async function refreshTabSelection(
+  profileCtx: ProfileContext,
+  tab: BrowserTab,
+): Promise<BrowserTab> {
+  if (tab.tabId === undefined) {
+    return await profileCtx.ensureTabAvailable({ targetId: tab.targetId });
+  }
+  return await profileCtx.ensureTabAvailable({
+    tabId: tab.tabId,
+    targetId: tab.targetId,
   });
 }

@@ -7,11 +7,15 @@ import type {
   BrowserPageError,
 } from "./pw-session.js";
 
-function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>): string {
+function buildQuerySuffix(params: Array<[string, string | number | boolean | undefined]>): string {
   const query = new URLSearchParams();
   for (const [key, value] of params) {
     if (typeof value === "boolean") {
       query.set(key, String(value));
+      continue;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      query.set(key, String(Math.floor(value)));
       continue;
     }
     if (typeof value === "string" && value.length > 0) {
@@ -24,45 +28,63 @@ function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>)
 
 export async function browserConsoleMessages(
   baseUrl: string | undefined,
-  opts: { level?: string; targetId?: string; profile?: string } = {},
-): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string }> {
+  opts: { level?: string; targetId?: string; tabId?: number; profile?: string } = {},
+): Promise<{
+  ok: true;
+  messages: BrowserConsoleMessage[];
+  targetId: string;
+  tabId?: number;
+  url?: string;
+}> {
   const suffix = buildQuerySuffix([
     ["level", opts.level],
     ["targetId", opts.targetId],
+    ["tabId", opts.tabId],
     ["profile", opts.profile],
   ]);
   return await fetchBrowserJson<{
     ok: true;
     messages: BrowserConsoleMessage[];
     targetId: string;
+    tabId?: number;
+    url?: string;
   }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
 }
 
 export async function browserPdfSave(
   baseUrl: string | undefined,
-  opts: { targetId?: string; profile?: string } = {},
+  opts: { targetId?: string; tabId?: number; profile?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/pdf${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId }),
+    body: JSON.stringify({ targetId: opts.targetId, tabId: opts.tabId }),
     timeoutMs: 20000,
   });
 }
 
 export async function browserPageErrors(
   baseUrl: string | undefined,
-  opts: { targetId?: string; clear?: boolean; profile?: string } = {},
-): Promise<{ ok: true; targetId: string; errors: BrowserPageError[] }> {
+  opts: { targetId?: string; tabId?: number; clear?: boolean; profile?: string } = {},
+): Promise<{
+  ok: true;
+  targetId: string;
+  tabId?: number;
+  url?: string;
+  errors: BrowserPageError[];
+}> {
   const suffix = buildQuerySuffix([
     ["targetId", opts.targetId],
+    ["tabId", opts.tabId],
     ["clear", typeof opts.clear === "boolean" ? opts.clear : undefined],
     ["profile", opts.profile],
   ]);
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;
+    tabId?: number;
+    url?: string;
     errors: BrowserPageError[];
   }>(withBaseUrl(baseUrl, `/errors${suffix}`), { timeoutMs: 20000 });
 }
@@ -71,13 +93,21 @@ export async function browserRequests(
   baseUrl: string | undefined,
   opts: {
     targetId?: string;
+    tabId?: number;
     filter?: string;
     clear?: boolean;
     profile?: string;
   } = {},
-): Promise<{ ok: true; targetId: string; requests: BrowserNetworkRequest[] }> {
+): Promise<{
+  ok: true;
+  targetId: string;
+  tabId?: number;
+  url?: string;
+  requests: BrowserNetworkRequest[];
+}> {
   const suffix = buildQuerySuffix([
     ["targetId", opts.targetId],
+    ["tabId", opts.tabId],
     ["filter", opts.filter],
     ["clear", typeof opts.clear === "boolean" ? opts.clear : undefined],
     ["profile", opts.profile],
@@ -85,6 +115,8 @@ export async function browserRequests(
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;
+    tabId?: number;
+    url?: string;
     requests: BrowserNetworkRequest[];
   }>(withBaseUrl(baseUrl, `/requests${suffix}`), { timeoutMs: 20000 });
 }
@@ -93,6 +125,7 @@ export async function browserTraceStart(
   baseUrl: string | undefined,
   opts: {
     targetId?: string;
+    tabId?: number;
     screenshots?: boolean;
     snapshots?: boolean;
     sources?: boolean;
@@ -105,6 +138,7 @@ export async function browserTraceStart(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       targetId: opts.targetId,
+      tabId: opts.tabId,
       screenshots: opts.screenshots,
       snapshots: opts.snapshots,
       sources: opts.sources,
@@ -115,26 +149,26 @@ export async function browserTraceStart(
 
 export async function browserTraceStop(
   baseUrl: string | undefined,
-  opts: { targetId?: string; path?: string; profile?: string } = {},
+  opts: { targetId?: string; tabId?: number; path?: string; profile?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/trace/stop${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId, path: opts.path }),
+    body: JSON.stringify({ targetId: opts.targetId, tabId: opts.tabId, path: opts.path }),
     timeoutMs: 20000,
   });
 }
 
 export async function browserHighlight(
   baseUrl: string | undefined,
-  opts: { ref: string; targetId?: string; profile?: string },
+  opts: { ref: string; targetId?: string; tabId?: number; profile?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserActionTargetOk>(withBaseUrl(baseUrl, `/highlight${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId, ref: opts.ref }),
+    body: JSON.stringify({ targetId: opts.targetId, tabId: opts.tabId, ref: opts.ref }),
     timeoutMs: 20000,
   });
 }
@@ -144,6 +178,7 @@ export async function browserResponseBody(
   opts: {
     url: string;
     targetId?: string;
+    tabId?: number;
     timeoutMs?: number;
     maxChars?: number;
     profile?: string;
@@ -151,6 +186,8 @@ export async function browserResponseBody(
 ): Promise<{
   ok: true;
   targetId: string;
+  tabId?: number;
+  url?: string;
   response: {
     url: string;
     status?: number;
@@ -163,6 +200,8 @@ export async function browserResponseBody(
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;
+    tabId?: number;
+    url?: string;
     response: {
       url: string;
       status?: number;
@@ -175,6 +214,7 @@ export async function browserResponseBody(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       targetId: opts.targetId,
+      tabId: opts.tabId,
       url: opts.url,
       timeoutMs: opts.timeoutMs,
       maxChars: opts.maxChars,

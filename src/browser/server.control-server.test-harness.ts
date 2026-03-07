@@ -316,6 +316,7 @@ export function installBrowserControlServerHooks() {
           return makeResponse([
             {
               id: "abcd1234",
+              tabId: 101,
               title: "Tab",
               url: "https://example.com",
               webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/abcd1234",
@@ -323,6 +324,7 @@ export function installBrowserControlServerHooks() {
             },
             {
               id: "abce9999",
+              tabId: 202,
               title: "Other",
               url: "https://other",
               webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/abce9999",
@@ -339,6 +341,7 @@ export function installBrowserControlServerHooks() {
           }
           return makeResponse({
             id: "newtab1",
+            tabId: 303,
             title: "",
             url: "about:blank",
             webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/newtab1",

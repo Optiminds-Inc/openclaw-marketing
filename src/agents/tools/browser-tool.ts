@@ -72,11 +72,15 @@ function formatTabsToolResult(tabs: unknown[]): AgentToolResult<unknown> {
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+  const tabId =
+    typeof params.tabId === "number" && Number.isFinite(params.tabId)
+      ? Math.floor(params.tabId)
+      : undefined;
   const timeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? params.timeoutMs
       : undefined;
-  return { targetId, timeoutMs };
+  return { targetId, tabId, timeoutMs };
 }
 
 type BrowserProxyFile = {
@@ -217,6 +221,7 @@ function resolveBrowserBaseUrl(params: {
   target?: "sandbox" | "host";
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
+  profile?: string;
 }): string | undefined {
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
@@ -240,6 +245,15 @@ function resolveBrowserBaseUrl(params: {
       "Browser control is disabled. Set browser.enabled=true in ~/.openclaw/openclaw.json.",
     );
   }
+
+  // For extension driver profiles, always use HTTP to Gateway instead of in-process dispatch.
+  // This ensures we use the Gateway's relay connection rather than creating a separate state.
+  const profileName = params.profile || resolved.defaultProfile || "default";
+  const profileConfig = resolved.profiles?.[profileName];
+  if (profileConfig?.driver === "extension") {
+    return `http://127.0.0.1:${resolved.controlPort}`;
+  }
+
   return undefined;
 }
 
@@ -255,11 +269,12 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: [
       "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
-      'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
+      'IMPORTANT: Always use profile="chrome" by default. This uses the Chrome extension relay to control the user\'s existing Chrome tabs.',
+      'Only use profile="openclaw" if explicitly requested for an isolated browser (requires local Chrome installation).',
+      'If the user mentions the Chrome extension / Browser Relay / toolbar button / "attach tab", ALWAYS use profile="chrome" (do not ask which profile).',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
       "Chrome extension relay needs an attached tab: user must click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
-      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
+      "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing tabId from the snapshot response into subsequent actions. Include targetId too when available, but treat tabId as the stable identity across navigation.",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
       `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
@@ -295,6 +310,7 @@ export function createBrowserTool(opts?: {
             target: resolvedTarget,
             sandboxBridgeUrl: opts?.sandboxBridgeUrl,
             allowHostControl: opts?.allowHostControl,
+            profile,
           });
 
       const proxyRequest = nodeTarget
@@ -406,40 +422,51 @@ export function createBrowserTool(opts?: {
           return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
         }
         case "focus": {
-          const targetId = readStringParam(params, "targetId", {
-            required: true,
-          });
+          const targetId = readStringParam(params, "targetId");
+          const tabId =
+            typeof params.tabId === "number" && Number.isFinite(params.tabId)
+              ? Math.floor(params.tabId)
+              : undefined;
+          if (!targetId && tabId === undefined) {
+            throw new Error("targetId or tabId is required");
+          }
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
               path: "/tabs/focus",
               profile,
-              body: { targetId },
+              body: { targetId, tabId },
             });
             return jsonResult(result);
           }
-          await browserFocusTab(baseUrl, targetId, { profile });
+          await browserFocusTab(baseUrl, { targetId, tabId }, { profile });
           return jsonResult({ ok: true });
         }
         case "close": {
           const targetId = readStringParam(params, "targetId");
+          const tabId =
+            typeof params.tabId === "number" && Number.isFinite(params.tabId)
+              ? Math.floor(params.tabId)
+              : undefined;
           if (proxyRequest) {
-            const result = targetId
-              ? await proxyRequest({
-                  method: "DELETE",
-                  path: `/tabs/${encodeURIComponent(targetId)}`,
-                  profile,
-                })
-              : await proxyRequest({
-                  method: "POST",
-                  path: "/act",
-                  profile,
-                  body: { kind: "close" },
-                });
+            const result =
+              targetId || tabId !== undefined
+                ? await proxyRequest({
+                    method: "POST",
+                    path: "/tabs/close",
+                    profile,
+                    body: { targetId, tabId },
+                  })
+                : await proxyRequest({
+                    method: "POST",
+                    path: "/act",
+                    profile,
+                    body: { kind: "close" },
+                  });
             return jsonResult(result);
           }
-          if (targetId) {
-            await browserCloseTab(baseUrl, targetId, { profile });
+          if (targetId || tabId !== undefined) {
+            await browserCloseTab(baseUrl, { targetId, tabId }, { profile });
           } else {
             await browserAct(baseUrl, { kind: "close" }, { profile });
           }
@@ -461,6 +488,10 @@ export function createBrowserTool(opts?: {
           const refs = params.refs === "aria" || params.refs === "role" ? params.refs : undefined;
           const hasMaxChars = Object.hasOwn(params, "maxChars");
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+          const tabId =
+            typeof params.tabId === "number" && Number.isFinite(params.tabId)
+              ? Math.floor(params.tabId)
+              : undefined;
           const limit =
             typeof params.limit === "number" && Number.isFinite(params.limit)
               ? params.limit
@@ -496,6 +527,7 @@ export function createBrowserTool(opts?: {
                 query: {
                   format,
                   targetId,
+                  tabId,
                   limit,
                   ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
                   refs,
@@ -511,6 +543,7 @@ export function createBrowserTool(opts?: {
             : await browserSnapshot(baseUrl, {
                 format,
                 targetId,
+                tabId,
                 limit,
                 ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
                 refs,
@@ -533,6 +566,7 @@ export function createBrowserTool(opts?: {
               ok: true,
               format: snapshot.format,
               targetId: snapshot.targetId,
+              tabId: snapshot.tabId,
               url: snapshot.url,
               truncated: snapshot.truncated,
               stats: snapshot.stats,
@@ -574,6 +608,7 @@ export function createBrowserTool(opts?: {
                 ...wrapped.safeDetails,
                 format: "aria",
                 targetId: snapshot.targetId,
+                tabId: snapshot.tabId,
                 url: snapshot.url,
                 nodeCount: snapshot.nodes.length,
                 externalContent: {
@@ -589,6 +624,10 @@ export function createBrowserTool(opts?: {
         }
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
+          const tabId =
+            typeof params.tabId === "number" && Number.isFinite(params.tabId)
+              ? Math.floor(params.tabId)
+              : undefined;
           const fullPage = Boolean(params.fullPage);
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
@@ -600,6 +639,7 @@ export function createBrowserTool(opts?: {
                 profile,
                 body: {
                   targetId,
+                  tabId,
                   fullPage,
                   ref,
                   element,
@@ -608,6 +648,7 @@ export function createBrowserTool(opts?: {
               })) as Awaited<ReturnType<typeof browserScreenshotAction>>)
             : await browserScreenshotAction(baseUrl, {
                 targetId,
+                tabId,
                 fullPage,
                 ref,
                 element,
@@ -625,6 +666,10 @@ export function createBrowserTool(opts?: {
             required: true,
           });
           const targetId = readStringParam(params, "targetId");
+          const tabId =
+            typeof params.tabId === "number" && Number.isFinite(params.tabId)
+              ? Math.floor(params.tabId)
+              : undefined;
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -633,6 +678,7 @@ export function createBrowserTool(opts?: {
               body: {
                 url: targetUrl,
                 targetId,
+                tabId,
               },
             });
             return jsonResult(result);
@@ -641,6 +687,7 @@ export function createBrowserTool(opts?: {
             await browserNavigate(baseUrl, {
               url: targetUrl,
               targetId,
+              tabId,
               profile,
             }),
           );
@@ -648,6 +695,10 @@ export function createBrowserTool(opts?: {
         case "console": {
           const level = typeof params.level === "string" ? params.level.trim() : undefined;
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+          const tabId =
+            typeof params.tabId === "number" && Number.isFinite(params.tabId)
+              ? Math.floor(params.tabId)
+              : undefined;
           if (proxyRequest) {
             const result = (await proxyRequest({
               method: "GET",
@@ -656,6 +707,7 @@ export function createBrowserTool(opts?: {
               query: {
                 level,
                 targetId,
+                tabId,
               },
             })) as { ok?: boolean; targetId?: string; messages?: unknown[] };
             const wrapped = wrapBrowserExternalJson({
@@ -673,7 +725,12 @@ export function createBrowserTool(opts?: {
             };
           }
           {
-            const result = await browserConsoleMessages(baseUrl, { level, targetId, profile });
+            const result = await browserConsoleMessages(baseUrl, {
+              level,
+              targetId,
+              tabId,
+              profile,
+            });
             const wrapped = wrapBrowserExternalJson({
               kind: "console",
               payload: result,
@@ -691,14 +748,18 @@ export function createBrowserTool(opts?: {
         }
         case "pdf": {
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+          const tabId =
+            typeof params.tabId === "number" && Number.isFinite(params.tabId)
+              ? Math.floor(params.tabId)
+              : undefined;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
                 path: "/pdf",
                 profile,
-                body: { targetId },
+                body: { targetId, tabId },
               })) as Awaited<ReturnType<typeof browserPdfSave>>)
-            : await browserPdfSave(baseUrl, { targetId, profile });
+            : await browserPdfSave(baseUrl, { targetId, tabId, profile });
           return {
             content: [{ type: "text" as const, text: `FILE:${result.path}` }],
             details: result,
@@ -721,7 +782,7 @@ export function createBrowserTool(opts?: {
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
-          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
+          const { targetId, tabId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -733,6 +794,7 @@ export function createBrowserTool(opts?: {
                 inputRef,
                 element,
                 targetId,
+                tabId,
                 timeoutMs,
               },
             });
@@ -746,6 +808,7 @@ export function createBrowserTool(opts?: {
               element,
               targetId,
               timeoutMs,
+              tabId,
               profile,
             }),
           );
@@ -753,7 +816,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = typeof params.promptText === "string" ? params.promptText : undefined;
-          const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
+          const { targetId, tabId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -763,6 +826,7 @@ export function createBrowserTool(opts?: {
                 accept,
                 promptText,
                 targetId,
+                tabId,
                 timeoutMs,
               },
             });
@@ -773,6 +837,7 @@ export function createBrowserTool(opts?: {
               accept,
               promptText,
               targetId,
+              tabId,
               timeoutMs,
               profile,
             }),
@@ -797,6 +862,26 @@ export function createBrowserTool(opts?: {
             return jsonResult(result);
           } catch (err) {
             const msg = String(err);
+            if (
+              profile === "chrome" &&
+              msg.includes("409:") &&
+              msg.includes("Browser Relay is disconnected or reconnecting")
+            ) {
+              throw new Error(
+                "Chrome Browser Relay is reconnecting. Wait for the extension connection to recover, then retry.",
+                { cause: err },
+              );
+            }
+            if (
+              profile === "chrome" &&
+              msg.includes("409:") &&
+              msg.includes("The page may have navigated")
+            ) {
+              throw new Error(
+                "Chrome tab identity changed after navigation. Reuse tabId from the latest snapshot/tabs response, then retry.",
+                { cause: err },
+              );
+            }
             if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {
               const tabs = proxyRequest
                 ? ((
@@ -814,7 +899,7 @@ export function createBrowserTool(opts?: {
                 );
               }
               throw new Error(
-                `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
+                `Chrome tab not found. Run action=tabs profile="chrome" and retry with the latest tabId/targetId pair.`,
                 { cause: err },
               );
             }

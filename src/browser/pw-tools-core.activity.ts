@@ -8,6 +8,7 @@ import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 export async function getPageErrorsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   clear?: boolean;
 }): Promise<{ errors: BrowserPageError[] }> {
   const page = await getPageForTargetId(opts);
@@ -22,6 +23,7 @@ export async function getPageErrorsViaPlaywright(opts: {
 export async function getNetworkRequestsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   filter?: string;
   clear?: boolean;
 }): Promise<{ requests: BrowserNetworkRequest[] }> {
@@ -56,6 +58,7 @@ function consolePriority(level: string) {
 export async function getConsoleMessagesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   level?: string;
 }): Promise<BrowserConsoleMessage[]> {
   const page = await getPageForTargetId(opts);

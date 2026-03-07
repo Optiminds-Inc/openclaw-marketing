@@ -17,6 +17,7 @@ export type BrowserActRequest =
       kind: "click";
       ref: string;
       targetId?: string;
+      tabId?: number;
       doubleClick?: boolean;
       button?: string;
       modifiers?: string[];
@@ -27,16 +28,18 @@ export type BrowserActRequest =
       ref: string;
       text: string;
       targetId?: string;
+      tabId?: number;
       submit?: boolean;
       slowly?: boolean;
       timeoutMs?: number;
     }
-  | { kind: "press"; key: string; targetId?: string; delayMs?: number }
-  | { kind: "hover"; ref: string; targetId?: string; timeoutMs?: number }
+  | { kind: "press"; key: string; targetId?: string; tabId?: number; delayMs?: number }
+  | { kind: "hover"; ref: string; targetId?: string; tabId?: number; timeoutMs?: number }
   | {
       kind: "scrollIntoView";
       ref: string;
       targetId?: string;
+      tabId?: number;
       timeoutMs?: number;
     }
   | {
@@ -44,6 +47,7 @@ export type BrowserActRequest =
       startRef: string;
       endRef: string;
       targetId?: string;
+      tabId?: number;
       timeoutMs?: number;
     }
   | {
@@ -51,15 +55,17 @@ export type BrowserActRequest =
       ref: string;
       values: string[];
       targetId?: string;
+      tabId?: number;
       timeoutMs?: number;
     }
   | {
       kind: "fill";
       fields: BrowserFormField[];
       targetId?: string;
+      tabId?: number;
       timeoutMs?: number;
     }
-  | { kind: "resize"; width: number; height: number; targetId?: string }
+  | { kind: "resize"; width: number; height: number; targetId?: string; tabId?: number }
   | {
       kind: "wait";
       timeMs?: number;
@@ -70,14 +76,23 @@ export type BrowserActRequest =
       loadState?: "load" | "domcontentloaded" | "networkidle";
       fn?: string;
       targetId?: string;
+      tabId?: number;
       timeoutMs?: number;
     }
-  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
-  | { kind: "close"; targetId?: string };
+  | {
+      kind: "evaluate";
+      fn: string;
+      ref?: string;
+      targetId?: string;
+      tabId?: number;
+      timeoutMs?: number;
+    }
+  | { kind: "close"; targetId?: string; tabId?: number };
 
 export type BrowserActResponse = {
   ok: true;
   targetId: string;
+  tabId?: number;
   url?: string;
   result?: unknown;
 };
@@ -88,7 +103,13 @@ export type BrowserDownloadPayload = {
   path: string;
 };
 
-type BrowserDownloadResult = { ok: true; targetId: string; download: BrowserDownloadPayload };
+type BrowserDownloadResult = {
+  ok: true;
+  targetId: string;
+  tabId?: number;
+  url?: string;
+  download: BrowserDownloadPayload;
+};
 
 async function postDownloadRequest(
   baseUrl: string | undefined,
@@ -110,6 +131,7 @@ export async function browserNavigate(
   opts: {
     url: string;
     targetId?: string;
+    tabId?: number;
     profile?: string;
   },
 ): Promise<BrowserActionTabResult> {
@@ -117,7 +139,7 @@ export async function browserNavigate(
   return await fetchBrowserJson<BrowserActionTabResult>(withBaseUrl(baseUrl, `/navigate${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
+    body: JSON.stringify({ url: opts.url, targetId: opts.targetId, tabId: opts.tabId }),
     timeoutMs: 20000,
   });
 }
@@ -128,6 +150,7 @@ export async function browserArmDialog(
     accept: boolean;
     promptText?: string;
     targetId?: string;
+    tabId?: number;
     timeoutMs?: number;
     profile?: string;
   },
@@ -140,6 +163,7 @@ export async function browserArmDialog(
       accept: opts.accept,
       promptText: opts.promptText,
       targetId: opts.targetId,
+      tabId: opts.tabId,
       timeoutMs: opts.timeoutMs,
     }),
     timeoutMs: 20000,
@@ -154,6 +178,7 @@ export async function browserArmFileChooser(
     inputRef?: string;
     element?: string;
     targetId?: string;
+    tabId?: number;
     timeoutMs?: number;
     profile?: string;
   },
@@ -168,6 +193,7 @@ export async function browserArmFileChooser(
       inputRef: opts.inputRef,
       element: opts.element,
       targetId: opts.targetId,
+      tabId: opts.tabId,
       timeoutMs: opts.timeoutMs,
     }),
     timeoutMs: 20000,
@@ -179,6 +205,7 @@ export async function browserWaitForDownload(
   opts: {
     path?: string;
     targetId?: string;
+    tabId?: number;
     timeoutMs?: number;
     profile?: string;
   },
@@ -188,6 +215,7 @@ export async function browserWaitForDownload(
     "/wait/download",
     {
       targetId: opts.targetId,
+      tabId: opts.tabId,
       path: opts.path,
       timeoutMs: opts.timeoutMs,
     },
@@ -201,6 +229,7 @@ export async function browserDownload(
     ref: string;
     path: string;
     targetId?: string;
+    tabId?: number;
     timeoutMs?: number;
     profile?: string;
   },
@@ -210,6 +239,7 @@ export async function browserDownload(
     "/download",
     {
       targetId: opts.targetId,
+      tabId: opts.tabId,
       ref: opts.ref,
       path: opts.path,
       timeoutMs: opts.timeoutMs,
@@ -236,6 +266,7 @@ export async function browserScreenshotAction(
   baseUrl: string | undefined,
   opts: {
     targetId?: string;
+    tabId?: number;
     fullPage?: boolean;
     ref?: string;
     element?: string;
@@ -249,6 +280,7 @@ export async function browserScreenshotAction(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       targetId: opts.targetId,
+      tabId: opts.tabId,
       fullPage: opts.fullPage,
       ref: opts.ref,
       element: opts.element,

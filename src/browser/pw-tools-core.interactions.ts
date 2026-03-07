@@ -12,6 +12,7 @@ import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-co
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   ref: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
@@ -28,6 +29,7 @@ export async function highlightViaPlaywright(opts: {
 export async function clickViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   ref: string;
   doubleClick?: boolean;
   button?: "left" | "right" | "middle";
@@ -37,6 +39,7 @@ export async function clickViaPlaywright(opts: {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    tabId: opts.tabId,
   });
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -65,6 +68,7 @@ export async function clickViaPlaywright(opts: {
 export async function hoverViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   ref: string;
   timeoutMs?: number;
 }): Promise<void> {
@@ -84,6 +88,7 @@ export async function hoverViaPlaywright(opts: {
 export async function dragViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   startRef: string;
   endRef: string;
   timeoutMs?: number;
@@ -108,6 +113,7 @@ export async function dragViaPlaywright(opts: {
 export async function selectOptionViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   ref: string;
   values: string[];
   timeoutMs?: number;
@@ -131,6 +137,7 @@ export async function selectOptionViaPlaywright(opts: {
 export async function pressKeyViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   key: string;
   delayMs?: number;
 }): Promise<void> {
@@ -148,6 +155,7 @@ export async function pressKeyViaPlaywright(opts: {
 export async function typeViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   ref: string;
   text: string;
   submit?: boolean;
@@ -179,6 +187,7 @@ export async function typeViaPlaywright(opts: {
 export async function fillFormViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   fields: BrowserFormField[];
   timeoutMs?: number;
 }): Promise<void> {
@@ -221,6 +230,7 @@ export async function fillFormViaPlaywright(opts: {
 export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   fn: string;
   ref?: string;
   timeoutMs?: number;
@@ -371,6 +381,7 @@ export async function evaluateViaPlaywright(opts: {
 export async function scrollIntoViewViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   ref: string;
   timeoutMs?: number;
 }): Promise<void> {
@@ -391,6 +402,7 @@ export async function scrollIntoViewViaPlaywright(opts: {
 export async function waitForViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   timeMs?: number;
   text?: string;
   textGone?: string;
@@ -445,6 +457,7 @@ export async function waitForViaPlaywright(opts: {
 export async function takeScreenshotViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   ref?: string;
   element?: string;
   fullPage?: boolean;
@@ -480,6 +493,7 @@ export async function takeScreenshotViaPlaywright(opts: {
 export async function screenshotWithLabelsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   maxLabels?: number;
   type?: "png" | "jpeg";
@@ -607,6 +621,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
 export async function setInputFilesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   inputRef?: string;
   element?: string;
   paths: string[];

@@ -10,7 +10,8 @@ import {
 } from "./agent.act.shared.js";
 import {
   readBody,
-  resolveTargetIdFromBody,
+  refreshTabSelection,
+  resolveTabSelectionFromBody,
   withPlaywrightRouteContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
@@ -28,7 +29,7 @@ export function registerBrowserAgentActRoutes(
       return jsonError(res, 400, "kind is required");
     }
     const kind: ActKind = kindRaw;
-    const targetId = resolveTargetIdFromBody(body);
+    const selection = resolveTabSelectionFromBody(body);
     if (Object.hasOwn(body, "selector") && kind !== "wait") {
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
     }
@@ -37,10 +38,20 @@ export function registerBrowserAgentActRoutes(
       req,
       res,
       ctx,
-      targetId,
+      selection,
       feature: `act:${kind}`,
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ cdpUrl, tab, pw, profileCtx }) => {
         const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
+        const respondWithTabState = async (extras?: Record<string, unknown>) => {
+          const nextTab = await refreshTabSelection(profileCtx, tab).catch(() => tab);
+          return res.json({
+            ok: true,
+            targetId: nextTab.targetId,
+            tabId: nextTab.tabId,
+            url: nextTab.url,
+            ...extras,
+          });
+        };
 
         switch (kind) {
           case "click": {
@@ -65,6 +76,7 @@ export function registerBrowserAgentActRoutes(
             const clickRequest: Parameters<typeof pw.clickViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               ref,
               doubleClick,
             };
@@ -78,7 +90,7 @@ export function registerBrowserAgentActRoutes(
               clickRequest.timeoutMs = timeoutMs;
             }
             await pw.clickViaPlaywright(clickRequest);
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return await respondWithTabState();
           }
           case "type": {
             const ref = toStringOrEmpty(body.ref);
@@ -95,6 +107,7 @@ export function registerBrowserAgentActRoutes(
             const typeRequest: Parameters<typeof pw.typeViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               ref,
               text,
               submit,
@@ -104,7 +117,7 @@ export function registerBrowserAgentActRoutes(
               typeRequest.timeoutMs = timeoutMs;
             }
             await pw.typeViaPlaywright(typeRequest);
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await respondWithTabState();
           }
           case "press": {
             const key = toStringOrEmpty(body.key);
@@ -115,10 +128,11 @@ export function registerBrowserAgentActRoutes(
             await pw.pressKeyViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               key,
               delayMs: delayMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await respondWithTabState();
           }
           case "hover": {
             const ref = toStringOrEmpty(body.ref);
@@ -129,10 +143,11 @@ export function registerBrowserAgentActRoutes(
             await pw.hoverViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               ref,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await respondWithTabState();
           }
           case "scrollIntoView": {
             const ref = toStringOrEmpty(body.ref);
@@ -143,13 +158,14 @@ export function registerBrowserAgentActRoutes(
             const scrollRequest: Parameters<typeof pw.scrollIntoViewViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               ref,
             };
             if (timeoutMs) {
               scrollRequest.timeoutMs = timeoutMs;
             }
             await pw.scrollIntoViewViaPlaywright(scrollRequest);
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await respondWithTabState();
           }
           case "drag": {
             const startRef = toStringOrEmpty(body.startRef);
@@ -161,11 +177,12 @@ export function registerBrowserAgentActRoutes(
             await pw.dragViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               startRef,
               endRef,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await respondWithTabState();
           }
           case "select": {
             const ref = toStringOrEmpty(body.ref);
@@ -177,11 +194,12 @@ export function registerBrowserAgentActRoutes(
             await pw.selectOptionViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               ref,
               values,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await respondWithTabState();
           }
           case "fill": {
             const rawFields = Array.isArray(body.fields) ? body.fields : [];
@@ -214,10 +232,11 @@ export function registerBrowserAgentActRoutes(
             await pw.fillFormViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               fields,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await respondWithTabState();
           }
           case "resize": {
             const width = toNumber(body.width);
@@ -228,10 +247,11 @@ export function registerBrowserAgentActRoutes(
             await pw.resizeViewportViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               width,
               height,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return await respondWithTabState();
           }
           case "wait": {
             const timeMs = toNumber(body.timeMs);
@@ -276,6 +296,7 @@ export function registerBrowserAgentActRoutes(
             await pw.waitForViaPlaywright({
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               timeMs,
               text,
               textGone,
@@ -285,7 +306,7 @@ export function registerBrowserAgentActRoutes(
               fn,
               timeoutMs,
             });
-            return res.json({ ok: true, targetId: tab.targetId });
+            return await respondWithTabState();
           }
           case "evaluate": {
             if (!evaluateEnabled) {
@@ -307,6 +328,7 @@ export function registerBrowserAgentActRoutes(
             const evalRequest: Parameters<typeof pw.evaluateViaPlaywright>[0] = {
               cdpUrl,
               targetId: tab.targetId,
+              tabId: tab.tabId,
               fn,
               ref,
               signal: req.signal,
@@ -315,16 +337,11 @@ export function registerBrowserAgentActRoutes(
               evalRequest.timeoutMs = evalTimeoutMs;
             }
             const result = await pw.evaluateViaPlaywright(evalRequest);
-            return res.json({
-              ok: true,
-              targetId: tab.targetId,
-              url: tab.url,
-              result,
-            });
+            return await respondWithTabState({ result });
           }
           case "close": {
-            await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId });
-            return res.json({ ok: true, targetId: tab.targetId });
+            await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId, tabId: tab.tabId });
+            return res.json({ ok: true, targetId: tab.targetId, tabId: tab.tabId, url: tab.url });
           }
           default: {
             return jsonError(res, 400, "unsupported kind");
@@ -339,7 +356,7 @@ export function registerBrowserAgentActRoutes(
 
   app.post("/response/body", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const selection = resolveTabSelectionFromBody(body);
     const url = toStringOrEmpty(body.url);
     const timeoutMs = toNumber(body.timeoutMs);
     const maxChars = toNumber(body.maxChars);
@@ -351,7 +368,7 @@ export function registerBrowserAgentActRoutes(
       req,
       res,
       ctx,
-      targetId,
+      selection,
       feature: "response body",
       run: async ({ cdpUrl, tab, pw }) => {
         const result = await pw.responseBodyViaPlaywright({
@@ -361,14 +378,20 @@ export function registerBrowserAgentActRoutes(
           timeoutMs: timeoutMs ?? undefined,
           maxChars: maxChars ?? undefined,
         });
-        res.json({ ok: true, targetId: tab.targetId, response: result });
+        res.json({
+          ok: true,
+          targetId: tab.targetId,
+          tabId: tab.tabId,
+          url: tab.url,
+          response: result,
+        });
       },
     });
   });
 
   app.post("/highlight", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const selection = resolveTabSelectionFromBody(body);
     const ref = toStringOrEmpty(body.ref);
     if (!ref) {
       return jsonError(res, 400, "ref is required");
@@ -378,15 +401,16 @@ export function registerBrowserAgentActRoutes(
       req,
       res,
       ctx,
-      targetId,
+      selection,
       feature: "highlight",
       run: async ({ cdpUrl, tab, pw }) => {
         await pw.highlightViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          tabId: tab.tabId,
           ref,
         });
-        res.json({ ok: true, targetId: tab.targetId });
+        res.json({ ok: true, targetId: tab.targetId, tabId: tab.tabId, url: tab.url });
       },
     });
   });

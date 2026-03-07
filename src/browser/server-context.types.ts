@@ -5,6 +5,13 @@ import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js"
 
 export type { BrowserTab };
 
+export type BrowserTabSelection =
+  | string
+  | {
+      targetId?: string | null;
+      tabId?: number | null;
+    };
+
 /**
  * Runtime state for a single profile's Chrome instance.
  */
@@ -26,13 +33,13 @@ export type BrowserServerState = {
 
 type BrowserProfileActions = {
   ensureBrowserAvailable: () => Promise<void>;
-  ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
+  ensureTabAvailable: (selection?: BrowserTabSelection) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (timeoutMs?: number) => Promise<boolean>;
   listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
-  focusTab: (targetId: string) => Promise<void>;
-  closeTab: (targetId: string) => Promise<void>;
+  focusTab: (selection: BrowserTabSelection) => Promise<void>;
+  closeTab: (selection: BrowserTabSelection) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };

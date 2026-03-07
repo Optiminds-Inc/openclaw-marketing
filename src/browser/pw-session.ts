@@ -786,9 +786,10 @@ export async function createPageViaPlaywright(opts: {
 export async function closePageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
+  tabId?: number;
 }): Promise<void> {
   const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl, opts.tabId);
   if (!page) {
     throw new Error("tab not found");
   }
@@ -802,9 +803,10 @@ export async function closePageByTargetIdViaPlaywright(opts: {
 export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
+  tabId?: number;
 }): Promise<void> {
   const { browser } = await connectBrowser(opts.cdpUrl);
-  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+  const page = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl, opts.tabId);
   if (!page) {
     throw new Error("tab not found");
   }

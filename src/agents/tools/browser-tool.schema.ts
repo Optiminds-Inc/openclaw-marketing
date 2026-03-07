@@ -49,6 +49,7 @@ const BrowserActSchema = Type.Object({
   kind: stringEnum(BROWSER_ACT_KINDS),
   // Common fields
   targetId: Type.Optional(Type.String()),
+  tabId: Type.Optional(Type.Number()),
   ref: Type.Optional(Type.String()),
   // click
   doubleClick: Type.Optional(Type.Boolean()),
@@ -87,6 +88,7 @@ export const BrowserToolSchema = Type.Object({
   profile: Type.Optional(Type.String()),
   targetUrl: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
+  tabId: Type.Optional(Type.Number()),
   limit: Type.Optional(Type.Number()),
   maxChars: Type.Optional(Type.Number()),
   mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),

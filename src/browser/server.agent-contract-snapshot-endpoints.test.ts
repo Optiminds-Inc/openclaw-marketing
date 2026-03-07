@@ -35,12 +35,15 @@ describe("browser control server", () => {
     const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
       ok: boolean;
       format?: string;
+      tabId?: number;
     };
     expect(snapAi.ok).toBe(true);
     expect(snapAi.format).toBe("ai");
+    expect(snapAi.tabId).toBe(101);
     expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
       maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
     });
 
@@ -53,21 +56,27 @@ describe("browser control server", () => {
     expect(lastCall).toEqual({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
     });
   });
 
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
 
-    const nav = await postJson<{ ok: boolean; targetId?: string }>(`${base}/navigate`, {
-      url: "https://example.com",
-    });
+    const nav = await postJson<{ ok: boolean; targetId?: string; tabId?: number }>(
+      `${base}/navigate`,
+      {
+        url: "https://example.com",
+      },
+    );
     expect(nav.ok).toBe(true);
     expect(typeof nav.targetId).toBe("string");
+    expect(nav.tabId).toBe(101);
     expect(pwMocks.navigateViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({
         cdpUrl: state.cdpBaseUrl,
         targetId: "abcd1234",
+        tabId: 101,
         url: "https://example.com",
         ssrfPolicy: {
           dangerouslyAllowPrivateNetwork: true,
@@ -85,6 +94,7 @@ describe("browser control server", () => {
     expect(pwMocks.clickViaPlaywright).toHaveBeenNthCalledWith(1, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
       ref: "1",
       doubleClick: false,
       button: "left",
@@ -110,6 +120,7 @@ describe("browser control server", () => {
     expect(pwMocks.typeViaPlaywright).toHaveBeenNthCalledWith(1, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
       ref: "1",
       text: "",
       submit: false,
@@ -124,6 +135,7 @@ describe("browser control server", () => {
     expect(pwMocks.pressKeyViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
       key: "Enter",
     });
 
@@ -135,6 +147,7 @@ describe("browser control server", () => {
     expect(pwMocks.hoverViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
       ref: "2",
     });
 
@@ -146,6 +159,7 @@ describe("browser control server", () => {
     expect(pwMocks.scrollIntoViewViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
       ref: "2",
     });
 
@@ -158,6 +172,7 @@ describe("browser control server", () => {
     expect(pwMocks.dragViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
       startRef: "3",
       endRef: "4",
     });

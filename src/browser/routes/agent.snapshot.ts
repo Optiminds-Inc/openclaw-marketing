@@ -17,8 +17,11 @@ import {
   getPwAiModule,
   handleRouteError,
   readBody,
+  refreshTabSelection,
   requirePwAi,
   resolveProfileContext,
+  resolveTabSelectionFromQuery,
+  resolveTabSelectionFromBody,
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
@@ -31,6 +34,7 @@ async function saveBrowserMediaResponse(params: {
   contentType: string;
   maxBytes: number;
   targetId: string;
+  tabId?: number;
   url: string;
 }) {
   await ensureMediaDir();
@@ -44,6 +48,7 @@ async function saveBrowserMediaResponse(params: {
     ok: true,
     path: path.resolve(saved.path),
     targetId: params.targetId,
+    tabId: params.tabId,
     url: params.url,
   });
 }
@@ -55,7 +60,7 @@ export function registerBrowserAgentSnapshotRoutes(
   app.post("/navigate", async (req, res) => {
     const body = readBody(req);
     const url = toStringOrEmpty(body.url);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const selection = resolveTabSelectionFromBody(body);
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
@@ -63,33 +68,41 @@ export function registerBrowserAgentSnapshotRoutes(
       req,
       res,
       ctx,
-      targetId,
+      selection,
       feature: "navigate",
-      run: async ({ cdpUrl, tab, pw }) => {
+      run: async ({ cdpUrl, tab, pw, profileCtx }) => {
         const result = await pw.navigateViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          tabId: tab.tabId,
           url,
           ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
         });
-        res.json({ ok: true, targetId: tab.targetId, ...result });
+        const nextTab = await refreshTabSelection(profileCtx, tab).catch(() => tab);
+        res.json({
+          ok: true,
+          targetId: nextTab.targetId,
+          tabId: nextTab.tabId,
+          ...result,
+        });
       },
     });
   });
 
   app.post("/pdf", async (req, res) => {
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const selection = resolveTabSelectionFromBody(body);
     await withPlaywrightRouteContext({
       req,
       res,
       ctx,
-      targetId,
+      selection,
       feature: "pdf",
       run: async ({ cdpUrl, tab, pw }) => {
         const pdf = await pw.pdfViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
+          tabId: tab.tabId,
         });
         await saveBrowserMediaResponse({
           res,
@@ -97,6 +110,7 @@ export function registerBrowserAgentSnapshotRoutes(
           contentType: "application/pdf",
           maxBytes: pdf.buffer.byteLength,
           targetId: tab.targetId,
+          tabId: tab.tabId,
           url: tab.url,
         });
       },
@@ -105,7 +119,7 @@ export function registerBrowserAgentSnapshotRoutes(
 
   app.post("/screenshot", async (req, res) => {
     const body = readBody(req);
-    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const selection = resolveTabSelectionFromBody(body);
     const fullPage = toBoolean(body.fullPage) ?? false;
     const ref = toStringOrEmpty(body.ref) || undefined;
     const element = toStringOrEmpty(body.element) || undefined;
@@ -119,7 +133,7 @@ export function registerBrowserAgentSnapshotRoutes(
       req,
       res,
       ctx,
-      targetId,
+      selection,
       run: async ({ profileCtx, tab, cdpUrl }) => {
         let buffer: Buffer;
         const shouldUsePlaywright =
@@ -135,6 +149,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const snap = await pw.takeScreenshotViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
+            tabId: tab.tabId,
             ref,
             element,
             fullPage,
@@ -160,6 +175,7 @@ export function registerBrowserAgentSnapshotRoutes(
           contentType: normalized.contentType ?? `image/${type}`,
           maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
           targetId: tab.targetId,
+          tabId: tab.tabId,
           url: tab.url,
         });
       },
@@ -171,7 +187,7 @@ export function registerBrowserAgentSnapshotRoutes(
     if (!profileCtx) {
       return;
     }
-    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const selection = resolveTabSelectionFromQuery(req.query);
     const mode = req.query.mode === "efficient" ? "efficient" : undefined;
     const labels = toBoolean(req.query.labels) ?? undefined;
     const explicitFormat =
@@ -210,7 +226,7 @@ export function registerBrowserAgentSnapshotRoutes(
     const frameSelectorValue = frameSelector.trim() || undefined;
 
     try {
-      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+      const tab = await profileCtx.ensureTabAvailable(selection);
       if ((labels || mode === "efficient") && format === "aria") {
         return jsonError(res, 400, "labels/mode=efficient require format=ai");
       }
@@ -246,6 +262,7 @@ export function registerBrowserAgentSnapshotRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
+                tabId: tab.tabId,
                 ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
               })
               .catch(async (err) => {
@@ -259,6 +276,7 @@ export function registerBrowserAgentSnapshotRoutes(
           const labeled = await pw.screenshotWithLabelsViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
+            tabId: tab.tabId,
             refs: "refs" in snap ? snap.refs : {},
             type: "png",
           });
@@ -278,6 +296,7 @@ export function registerBrowserAgentSnapshotRoutes(
             ok: true,
             format,
             targetId: tab.targetId,
+            tabId: tab.tabId,
             url: tab.url,
             labels: true,
             labelsCount: labeled.labels,
@@ -292,6 +311,7 @@ export function registerBrowserAgentSnapshotRoutes(
           ok: true,
           format,
           targetId: tab.targetId,
+          tabId: tab.tabId,
           url: tab.url,
           ...snap,
         });
@@ -309,6 +329,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 return await pw.snapshotAriaViaPlaywright({
                   cdpUrl: profileCtx.profile.cdpUrl,
                   targetId: tab.targetId,
+                  tabId: tab.tabId,
                   limit,
                 });
               });
@@ -323,6 +344,7 @@ export function registerBrowserAgentSnapshotRoutes(
         ok: true,
         format,
         targetId: tab.targetId,
+        tabId: tab.tabId,
         url: tab.url,
         ...resolved,
       });

@@ -422,3 +422,60 @@ describe("browser tool external content wrapping", () => {
     });
   });
 });
+
+describe("browser tool tabId passthrough", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  });
+
+  it("passes tabId through focus, close, navigate, console, pdf, and dialog actions", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-focus", { action: "focus", tabId: 42 });
+    await tool.execute?.("call-close", { action: "close", tabId: 42 });
+    await tool.execute?.("call-nav", {
+      action: "navigate",
+      targetUrl: "https://example.com",
+      tabId: 42,
+    });
+    await tool.execute?.("call-console", { action: "console", tabId: 42 });
+    await tool.execute?.("call-pdf", { action: "pdf", tabId: 42 });
+    await tool.execute?.("call-dialog", {
+      action: "dialog",
+      tabId: 42,
+      accept: true,
+    });
+
+    expect(browserClientMocks.browserFocusTab).toHaveBeenCalledWith(
+      undefined,
+      { targetId: undefined, tabId: 42 },
+      { profile: undefined },
+    );
+    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
+      undefined,
+      { targetId: undefined, tabId: 42 },
+      { profile: undefined },
+    );
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ tabId: 42, targetId: undefined, url: "https://example.com" }),
+    );
+    expect(browserActionsMocks.browserConsoleMessages).toHaveBeenCalledWith(undefined, {
+      level: undefined,
+      targetId: undefined,
+      tabId: 42,
+      profile: undefined,
+    });
+    expect(browserActionsMocks.browserPdfSave).toHaveBeenCalledWith(undefined, {
+      targetId: undefined,
+      tabId: 42,
+      profile: undefined,
+    });
+    expect(browserActionsMocks.browserArmDialog).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ tabId: 42, targetId: undefined, accept: true }),
+    );
+  });
+});

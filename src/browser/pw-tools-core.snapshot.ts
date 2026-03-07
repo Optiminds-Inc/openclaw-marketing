@@ -22,12 +22,14 @@ import {
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   limit?: number;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    tabId: opts.tabId,
   });
   ensurePageState(page);
   const session = await page.context().newCDPSession(page);
@@ -46,12 +48,14 @@ export async function snapshotAriaViaPlaywright(opts: {
 export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   timeoutMs?: number;
   maxChars?: number;
 }): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    tabId: opts.tabId,
   });
   ensurePageState(page);
 
@@ -90,6 +94,7 @@ export async function snapshotAiViaPlaywright(opts: {
 export async function snapshotRoleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   selector?: string;
   frameSelector?: string;
   refsMode?: "role" | "aria";
@@ -102,6 +107,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    tabId: opts.tabId,
   });
   ensurePageState(page);
 
@@ -162,6 +168,7 @@ export async function snapshotRoleViaPlaywright(opts: {
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   url: string;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -190,6 +197,7 @@ export async function navigateViaPlaywright(opts: {
 export async function resizeViewportViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   width: number;
   height: number;
 }): Promise<void> {
@@ -204,6 +212,7 @@ export async function resizeViewportViaPlaywright(opts: {
 export async function closePageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -213,6 +222,7 @@ export async function closePageViaPlaywright(opts: {
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);

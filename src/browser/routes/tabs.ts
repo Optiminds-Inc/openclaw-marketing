@@ -1,4 +1,8 @@
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type {
+  BrowserRouteContext,
+  BrowserTabSelection,
+  ProfileContext,
+} from "../server-context.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
@@ -63,21 +67,28 @@ function resolveIndexedTab(
   return typeof index === "number" ? tabs[index] : tabs.at(0);
 }
 
-function parseRequiredTargetId(res: BrowserResponse, rawTargetId: unknown): string | null {
-  const targetId = toStringOrEmpty(rawTargetId);
-  if (!targetId) {
-    jsonError(res, 400, "targetId is required");
+function parseTabSelection(
+  res: BrowserResponse,
+  rawSelection: { targetId?: unknown; tabId?: unknown },
+): BrowserTabSelection | null {
+  const targetId = toStringOrEmpty(rawSelection.targetId);
+  const tabId =
+    typeof rawSelection.tabId === "number" && Number.isFinite(rawSelection.tabId)
+      ? Math.floor(rawSelection.tabId)
+      : undefined;
+  if (!targetId && tabId === undefined) {
+    jsonError(res, 400, "targetId or tabId is required");
     return null;
   }
-  return targetId;
+  return { targetId: targetId || undefined, tabId };
 }
 
 async function runTabTargetMutation(params: {
   req: BrowserRequest;
   res: BrowserResponse;
   ctx: BrowserRouteContext;
-  targetId: string;
-  mutate: (profileCtx: ProfileContext, targetId: string) => Promise<void>;
+  selection: BrowserTabSelection;
+  mutate: (profileCtx: ProfileContext, selection: BrowserTabSelection) => Promise<void>;
 }) {
   await withTabsProfileRoute({
     req: params.req,
@@ -88,7 +99,7 @@ async function runTabTargetMutation(params: {
       if (!(await ensureBrowserRunning(profileCtx, params.res))) {
         return;
       }
-      await params.mutate(profileCtx, params.targetId);
+      await params.mutate(profileCtx, params.selection);
       params.res.json({ ok: true });
     },
   });
@@ -131,33 +142,49 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   });
 
   app.post("/tabs/focus", async (req, res) => {
-    const targetId = parseRequiredTargetId(res, (req.body as { targetId?: unknown })?.targetId);
-    if (!targetId) {
+    const selection = parseTabSelection(res, req.body as { targetId?: unknown; tabId?: unknown });
+    if (!selection) {
       return;
     }
     await runTabTargetMutation({
       req,
       res,
       ctx,
-      targetId,
-      mutate: async (profileCtx, id) => {
-        await profileCtx.focusTab(id);
+      selection,
+      mutate: async (profileCtx, nextSelection) => {
+        await profileCtx.focusTab(nextSelection);
+      },
+    });
+  });
+
+  app.post("/tabs/close", async (req, res) => {
+    const selection = parseTabSelection(res, req.body as { targetId?: unknown; tabId?: unknown });
+    if (!selection) {
+      return;
+    }
+    await runTabTargetMutation({
+      req,
+      res,
+      ctx,
+      selection,
+      mutate: async (profileCtx, nextSelection) => {
+        await profileCtx.closeTab(nextSelection);
       },
     });
   });
 
   app.delete("/tabs/:targetId", async (req, res) => {
-    const targetId = parseRequiredTargetId(res, req.params.targetId);
-    if (!targetId) {
+    const selection = parseTabSelection(res, { targetId: req.params.targetId });
+    if (!selection) {
       return;
     }
     await runTabTargetMutation({
       req,
       res,
       ctx,
-      targetId,
-      mutate: async (profileCtx, id) => {
-        await profileCtx.closeTab(id);
+      selection,
+      mutate: async (profileCtx, nextSelection) => {
+        await profileCtx.closeTab(nextSelection);
       },
     });
   });
@@ -194,7 +221,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             return jsonError(res, 404, "tab not found");
           }
           await profileCtx.closeTab(target.targetId);
-          return res.json({ ok: true, targetId: target.targetId });
+          return res.json({ ok: true, targetId: target.targetId, tabId: target.tabId });
         }
 
         if (action === "select") {
@@ -207,7 +234,12 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             return jsonError(res, 404, "tab not found");
           }
           await profileCtx.focusTab(target.targetId);
-          return res.json({ ok: true, targetId: target.targetId });
+          return res.json({
+            ok: true,
+            targetId: target.targetId,
+            tabId: target.tabId,
+            url: target.url,
+          });
         }
 
         return jsonError(res, 400, "unknown tab action");

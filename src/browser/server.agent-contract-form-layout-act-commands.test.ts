@@ -54,6 +54,7 @@ describe("browser control server", () => {
       expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith({
         cdpUrl: state.cdpBaseUrl,
         targetId: "abcd1234",
+        tabId: 101,
         ref: "5",
         values: ["a", "b"],
       });
@@ -66,6 +67,7 @@ describe("browser control server", () => {
       expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
         cdpUrl: state.cdpBaseUrl,
         targetId: "abcd1234",
+        tabId: 101,
         fields: [{ ref: "6", type: "textbox", value: "hello" }],
       });
 
@@ -78,6 +80,7 @@ describe("browser control server", () => {
       expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith({
         cdpUrl: state.cdpBaseUrl,
         targetId: "abcd1234",
+        tabId: 101,
         width: 800,
         height: 600,
       });
@@ -90,6 +93,7 @@ describe("browser control server", () => {
       expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith({
         cdpUrl: state.cdpBaseUrl,
         targetId: "abcd1234",
+        tabId: 101,
         timeMs: 5,
         text: undefined,
         textGone: undefined,
@@ -105,6 +109,7 @@ describe("browser control server", () => {
         expect.objectContaining({
           cdpUrl: state.cdpBaseUrl,
           targetId: "abcd1234",
+          tabId: 101,
           fn: "() => 1",
           ref: undefined,
           signal: expect.any(AbortSignal),
@@ -149,6 +154,7 @@ describe("browser control server", () => {
     expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
+      tabId: 101,
       // The server resolves paths (which adds a drive letter on Windows for `\\tmp\\...` style roots).
       paths: [path.resolve(DEFAULT_UPLOAD_DIR, "a.txt")],
       timeoutMs: 1234,
@@ -177,18 +183,41 @@ describe("browser control server", () => {
       timeoutMs: 5678,
     });
     expect(dialog).toMatchObject({ ok: true });
+    expect(pwMocks.armDialogViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      tabId: 101,
+      accept: true,
+      promptText: undefined,
+      timeoutMs: 5678,
+    });
 
     const waitDownload = await postJson(`${base}/wait/download`, {
       path: "report.pdf",
       timeoutMs: 1111,
     });
     expect(waitDownload).toMatchObject({ ok: true });
+    expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      tabId: 101,
+      timeoutMs: 1111,
+      path: path.resolve(DEFAULT_DOWNLOAD_DIR, "report.pdf"),
+    });
 
     const download = await postJson(`${base}/download`, {
       ref: "e12",
       path: "report.pdf",
     });
     expect(download).toMatchObject({ ok: true });
+    expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      tabId: 101,
+      ref: "e12",
+      path: path.resolve(DEFAULT_DOWNLOAD_DIR, "report.pdf"),
+      timeoutMs: undefined,
+    });
 
     const responseBody = await postJson(`${base}/response/body`, {
       url: "**/api/data",
@@ -203,10 +232,21 @@ describe("browser control server", () => {
     };
     expect(consoleRes.ok).toBe(true);
     expect(Array.isArray(consoleRes.messages)).toBe(true);
+    expect(pwMocks.getConsoleMessagesViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      tabId: 101,
+      level: "error",
+    });
 
     const pdf = await postJson<{ ok: boolean; path?: string }>(`${base}/pdf`, {});
     expect(pdf.ok).toBe(true);
     expect(typeof pdf.path).toBe("string");
+    expect(pwMocks.pdfViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      tabId: 101,
+    });
 
     const shot = await postJson<{ ok: boolean; path?: string }>(`${base}/screenshot`, {
       element: "body",

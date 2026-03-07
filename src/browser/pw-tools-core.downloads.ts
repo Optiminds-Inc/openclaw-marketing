@@ -142,6 +142,7 @@ async function awaitDownloadPayload(params: {
 export async function armFileUploadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   paths?: string[];
   timeoutMs?: number;
 }): Promise<void> {
@@ -204,6 +205,7 @@ export async function armFileUploadViaPlaywright(opts: {
 export async function armDialogViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   accept: boolean;
   promptText?: string;
   timeoutMs?: number;
@@ -235,6 +237,7 @@ export async function armDialogViaPlaywright(opts: {
 export async function waitForDownloadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   path?: string;
   timeoutMs?: number;
 }): Promise<{
@@ -256,6 +259,7 @@ export async function waitForDownloadViaPlaywright(opts: {
 export async function downloadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  tabId?: number;
   ref: string;
   path: string;
   timeoutMs?: number;

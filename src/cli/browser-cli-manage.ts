@@ -358,9 +358,10 @@ export function registerBrowserManageCommands(
           await callBrowserRequest(
             parent,
             {
-              method: "DELETE",
-              path: `/tabs/${encodeURIComponent(targetId.trim())}`,
+              method: "POST",
+              path: "/tabs/close",
               query: profile ? { profile } : undefined,
+              body: { targetId: targetId.trim() },
             },
             { timeoutMs: 5000 },
           );
